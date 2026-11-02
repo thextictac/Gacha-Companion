@@ -17,10 +17,7 @@ from game_companion.core.recommendations.gear_eval import evaluate_inventory
 from game_companion.core.recommendations.planner import audit_roster, build_upgrade_plan
 from game_companion.core.recommendations.team_recs import compare_equipment, recommend_teams
 from game_companion.core.roster.service import RosterService
-from game_companion.core.teams.optimizer import optimize_team_allocation
-from game_companion.core.teams.scoring import score_team_composition, viable_member_keys
-from game_companion.db.repositories import EncounterRepository, PlayerRepository
-from game_companion.errors import NotFoundError
+from game_companion.core.teams.endgame import plan_encounter
 
 router = APIRouter(prefix="/games/{game_id}")
 
@@ -76,77 +73,15 @@ def equipment_compare(game_id: str, payload: EquipmentCompareRequest | None = No
 @router.post("/recommendations/optimize")
 def optimize(game_id: str, payload: OptimizeRequest | None = None, session: Session = Depends(get_db), player=Depends(resolve_player)):
     payload = payload or OptimizeRequest()
-    adapter = adapter_for(game_id)
-    encounter = EncounterRepository(session).find_by_key(game_id, payload.encounter_key)
-    if encounter is None:
-        known = {m.key: m for m in adapter.encounter_modes()}
-        if payload.encounter_key not in known:
-            raise NotFoundError(
-                f"unknown encounter '{payload.encounter_key}' (define it via the encounters "
-                "API or use an adapter mode)"
-            )
-        slot_count = known[payload.encounter_key].slot_count
-        slot_constraints: list[dict] = [{} for _ in range(slot_count)]
-    else:
-        slot_count = max(len(encounter.slots), 1)
-        slot_constraints = [slot.constraints or {} for slot in encounter.slots]
-        slot_constraints += [{}] * (slot_count - len(slot_constraints))
-
-    roster = viable_member_keys(session, game_id, player.id)
-    team_size = adapter.team_rules().max_size
-    preferences = {
-        p.key: p.value
-        for p in PlayerRepository(session).list_preferences(player.id)
-        if p.scope in ("global", game_id)
-    }
-    comfort_weight = payload.comfort_weight
-    if payload.objective == "maximize_comfort" and comfort_weight == 0.0:
-        comfort_weight = 1.5
-
-    def team_score_fn(members, slot_index: int):
-        scored = score_team_composition(
-            session, adapter, game_id, player.id, members,
-            encounter_constraints=slot_constraints[slot_index],
-            preferences=preferences,
-            comfort_weight=comfort_weight,
-        )
-        scored_total = scored["total"]
-        if payload.objective == "maximize_clears":
-            # Once a slot is strong enough to likely clear, extra strength there
-            # is worth nothing to this objective — push the surplus to weak slots.
-            scored_total = min(scored_total, 7.0)
-        return scored_total, scored["components"]
-
-    result = optimize_team_allocation(
-        roster, slot_count, team_size, team_score_fn,
-        max_roster=min(len(roster), 15),
+    return plan_encounter(
+        session,
+        adapter_for(game_id),
+        game_id,
+        player.id,
+        payload.encounter_key,
+        objective=payload.objective,
+        comfort_weight=payload.comfort_weight,
     )
-    return {
-        "encounter_key": payload.encounter_key,
-        "objective": payload.objective,
-        "feasible": result.feasible,
-        "best": _allocation_dict(result.best) if result.best else None,
-        "alternatives": [_allocation_dict(a) for a in result.alternatives],
-        "greedy_comparison": _allocation_dict(result.greedy) if result.greedy else None,
-        "explanation": result.explanation,
-        "score_warning": (
-            "All slot scores are labeled HEURISTIC components (synergy, encounter fit, "
-            "build readiness, comfort). No DPS simulation exists; totals are relative "
-            "only, and never percentages of real damage."
-        ),
-        "notes": [
-            f"evaluated {result.evaluated_team_combos} team-slot combinations",
-        ],
-    }
-
-
-def _allocation_dict(allocation) -> dict | None:
-    if allocation is None:
-        return None
-    return {
-        "total": allocation.total,
-        "teams": allocation.teams,
-    }
 
 
 @router.post("/tutor/explain")

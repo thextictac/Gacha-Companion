@@ -64,6 +64,7 @@ class ZZZAdapter(GameAdapter):
             self._name_index[key] = key
             self._name_index[key.replace("_", " ")] = key
             self._name_index[str(meta.get("name", "")).lower()] = key
+        self._team_archetypes: list[dict[str, Any]] | None = None
 
     # -- identity / terminology ------------------------------------------------
 
@@ -375,10 +376,17 @@ class ZZZAdapter(GameAdapter):
     def score_gear(self, gear: Mapping[str, Any], context: Mapping[str, Any]) -> GearEvaluation:
         return gear_rules.score_gear(gear, context, self.character_meta)
 
+    def _meta_teams(self) -> list[dict[str, Any]]:
+        if self._team_archetypes is None:
+            self._team_archetypes = list(self.gear_meta().get("archetypes") or [])
+        return self._team_archetypes
+
     def score_team(
         self, member_keys: Sequence[str], context: Mapping[str, Any]
     ) -> list[ScoreComponent]:
-        return team_rules.score_team(member_keys, self.character_meta, context)
+        return team_rules.score_team(
+            member_keys, self.character_meta, context, self._meta_teams()
+        )
 
     def character_slot_fit(
         self, character_key: str, encounter_constraints: Mapping[str, Any]

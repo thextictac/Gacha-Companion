@@ -144,9 +144,12 @@ class NTEAdapter(GameAdapter):
     def encounter_modes(self) -> list[EncounterModeDefinition]:
         return [
             EncounterModeDefinition(
-                key="nte_endgame", name="Endgame (verify)",
-                slot_count=1,
-                description="starter data — official endgame mode names/rules not yet encoded",
+                key="beyond_the_rails", name="Beyond the Rails",
+                slot_count=2,
+                description=(
+                    "starter data — Beyond the Rails stops 6+ require Inbound and Outbound "
+                    "teams with no shared characters"
+                ),
             )
         ]
 

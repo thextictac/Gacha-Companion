@@ -278,3 +278,30 @@ def test_chat_llm_failure_is_persisted_and_visible(client, chat_world):
     service.session.commit()
     detail = client.get(f"/api/games/zzz/chat/conversations/{conv.id}").json()
     assert detail["messages"][-1]["content"].startswith("(chat failed:")
+
+
+def test_endgame_and_build_guide_tools_are_available(client, chat_world):
+    from tests.conftest import make_character
+
+    make_character(client, "zzz", "anby", player_id=chat_world)
+    from game_companion.core.chat.service import ChatService
+    from game_companion.core.games.registry import get_adapter
+
+    class _LLM:
+        configured = True
+
+    service = ChatService(_session(client), get_adapter("zzz"), chat_world, _LLM())
+    tool_names = {row["function"]["name"] for row in service._tool_schemas()}
+    assert {"recommend_teams", "plan_endgame", "evaluate_gear", "get_build_guide"} <= tool_names
+
+    encounters = service._dispatch("list_encounters", {})
+    assert {row["key"] for row in encounters} == {"shiyu_defense", "deadly_assault"}
+
+    teams = service._dispatch("recommend_teams", {"count": 2})
+    assert teams["best_owned"], teams
+    assert all(len(team["members"]) == 3 for team in teams["best_owned"])
+
+    guide = service._dispatch("get_build_guide", {"character": "burnice"})
+    assert guide["available"] is True
+    assert guide["source"]["source"].startswith("Prydwen")
+    assert "Anomaly Proficiency" in guide["substat_priority_raw"]

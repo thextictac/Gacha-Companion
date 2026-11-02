@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Edit {{ equipment_noun }}</h1>
+  <a class="button" href="/ui/gear">Back to inventory</a>
+</div>
+<form method="post" action="/ui/gear/equipment/{{ selected.id }}/edit">
+  <section class="card">
+    <h2>{{ selected.display_name }}</h2>
+    <div class="grid2">
+      <p><label>Name<br><input type="text" name="display_name" value="{{ selected.display_name }}"></label></p>
+      <p><label>Level<br><input type="text" name="level" value="{{ selected.level if selected.level is not none else '' }}" style="max-width:6rem"></label></p>
+      <p><label>Refinement / stars<br><input type="text" name="refinement" value="{{ selected.refinement if selected.refinement is not none else '' }}" style="max-width:6rem"></label></p>
+    </div>
+    <p><label>Equipped by<br>
+      <select name="equipped_character_id">
+        <option value="">— not equipped —</option>
+        {% for cid, cname in character_options %}
+        <option value="{{ cid }}" {% if selected_character == cid %}selected{% endif %}>{{ cname }}</option>
+        {% endfor %}
+      </select>
+    </label></p>
+    <p><label><input type="checkbox" name="locked" {% if selected.locked %}checked{% endif %}> Locked</label></p>
+    <p><label>Notes<br><textarea name="notes" rows="2" style="width:100%">{{ selected.notes or '' }}</textarea></label></p>
+  </section>
+  <p><button type="submit">Save changes</button></p>
+</form>
+{% endblock %}

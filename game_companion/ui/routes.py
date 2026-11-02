@@ -21,10 +21,13 @@ from game_companion.core import dashboard as dashboard_mod
 from game_companion.core.backup import cleanup_staging, create_backup, list_backups, stage_restore
 from game_companion.core.catalog.service import CatalogService
 from game_companion.core.codes.service import CodeService
+from game_companion.core.equipment.service import EquipmentService, GearService
 from game_companion.core.games.registry import list_adapters
+from game_companion.core.recommendations.build_guide import build_guide as build_guide_for
 from game_companion.core.recommendations.planner import audit_roster
 from game_companion.core.resources.service import ResourceService
 from game_companion.core.roster.service import RosterService
+from game_companion.core.teams.endgame import plan_encounter
 from game_companion.core.teams.service import TeamService
 from game_companion.db.backup_swap import swap_live_database
 from game_companion.db.models import CompanionMemory, PlayerProfile
@@ -59,6 +62,160 @@ STATUS_CHIP = {
     "prep": "chip-cyan",
     "unknown": "chip-gray",
 }
+
+
+def _stat_lookup(adapter) -> dict:
+    return {stat.key: stat for stat in adapter.stat_definitions()}
+
+
+def _format_stat_value(adapter, key: str | None, value: float | None) -> str:
+    if not key or value is None:
+        return "—"
+    stat = _stat_lookup(adapter).get(key)
+    name = stat.name if stat else key
+    if stat is not None and stat.kind == "percent":
+        # API/imported rows normally store 0..1, but hand-entered legacy rows
+        # sometimes store whole percentages (24 instead of 0.24).
+        shown = value * 100 if abs(value) <= 1 else value
+        return f"{name} {shown:g}%"
+    return f"{name} {value:g}"
+
+
+def _input_stat_value(adapter, key: str, raw: str) -> float | None:
+    """Accept 24, 24%, or 0.24 for percent stats — store the 0..1 fraction."""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    has_percent = text.endswith("%")
+    text = text.removesuffix("%").strip()
+    value = float(text)
+    stat = _stat_lookup(adapter).get(key)
+    if stat is not None and stat.kind == "percent":
+        if has_percent or value > 1:
+            value = value / 100.0
+    return value
+
+
+def _rarity_value(raw: str) -> int | str | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        # ZZZ/S-Rank style labels are accepted by the API schema; keep them
+        # verbatim rather than inventing a numeric mapping.
+        return text
+
+
+def _substats_from_form(adapter, form) -> list[dict]:
+    """Read substat_key_N / substat_value_N rows from a browser form."""
+    out: list[dict] = []
+    for index in range(1, 7):
+        key = str(form.get(f"substat_key_{index}") or "").strip()
+        raw = str(form.get(f"substat_value_{index}") or "").strip()
+        if not key or not raw:
+            continue
+        try:
+            value = _input_stat_value(adapter, key, raw)
+        except ValueError:
+            continue
+        if value is None:
+            continue
+        out.append({"key": key, "value": value})
+    return out
+
+
+def _substat_display(adapter, gear) -> list[dict]:
+    out = []
+    for sub in gear.substats or []:
+        if not isinstance(sub, dict):
+            continue
+        key = sub.get("key")
+        value = sub.get("value")
+        out.append({
+            "key": key,
+            "text": _format_stat_value(adapter, key, value),
+            "rolls": sub.get("rolls"),
+        })
+    return out
+
+
+def _gear_evaluation(adapter, gear, owned_specialties: list[str]) -> dict | None:
+    try:
+        evaluation = adapter.score_gear(
+            {
+                "slot": gear.slot,
+                "set_key": gear.set_key,
+                "rarity": gear.rarity,
+                "level": gear.level,
+                "main_stat_key": gear.main_stat_key,
+                "main_stat_value": gear.main_stat_value,
+                "substats": gear.substats or [],
+            },
+            {"owned_specialties": owned_specialties},
+        )
+    except NotImplementedError:
+        return None
+    return {
+        "verdict": evaluation.verdict,
+        "score": evaluation.score,
+        "label": evaluation.label,
+        "reasons": evaluation.reasons,
+    }
+
+
+def _loadout_context(session: Session, adapter, char, service: RosterService) -> dict:
+    """Active build plus every owned equipment/gear choice, grouped by slot."""
+    active = service.active_build(char)
+    equipment = EquipmentRepository(session).search(char.game_id, char.player_profile_id)
+    gear = GearRepository(session).search(char.game_id, char.player_profile_id)
+    chars = {
+        c.id: c.display_name
+        for c in CharacterRepository(session).search(char.game_id, char.player_profile_id)
+    }
+    slot_map = {row.slot: row.gear_item_id for row in (active.gear_slots if active else [])}
+    by_slot: dict[str, list[dict]] = {slot.key: [] for slot in adapter.gear_slots()}
+    for item in gear:
+        if item.slot not in by_slot:
+            by_slot[item.slot] = []
+        by_slot[item.slot].append(
+            {
+                "id": item.id,
+                "label": (
+                    f"{item.set_key or 'no set'} · slot {item.slot} · "
+                    f"{_format_stat_value(adapter, item.main_stat_key, item.main_stat_value)}"
+                    f" · lv {item.level if item.level is not None else '?'}"
+                    f" · {chars.get(item.equipped_character_id, 'free') if item.equipped_character_id else 'free'}"
+                ),
+                "current": slot_map.get(item.slot) == item.id,
+            }
+        )
+    for options in by_slot.values():
+        options.sort(key=lambda row: (not row["current"], row["label"].lower()))
+    equipment_options = [
+        {
+            "id": item.id,
+            "label": (
+                f"{item.display_name} · lv {item.level if item.level is not None else '?'}"
+                f" · stars {item.refinement if item.refinement is not None else '?'}"
+                f" · {chars.get(item.equipped_character_id, 'free') if item.equipped_character_id else 'free'}"
+            ),
+            "current": bool(active and active.equipment_item_id == item.id),
+        }
+        for item in equipment
+    ]
+    equipment_options.sort(key=lambda row: (not row["current"], row["label"].lower()))
+    return {
+        "active_build": active,
+        "equipment_options": equipment_options,
+        "gear_options": [
+            {"slot": slot.key, "name": slot.name, "options": by_slot.get(slot.key, [])}
+            for slot in adapter.gear_slots()
+        ],
+        "filled_slots": sum(1 for value in slot_map.values() if value),
+        "total_slots": max(len(adapter.gear_slots()), 1),
+    }
 
 
 def _ctx(request: Request, session: Session, title: str, active: str, **extra):
@@ -395,30 +552,184 @@ def roster_add(
 
 
 @router.get("/teams", response_class=HTMLResponse)
-def teams(request: Request, session: Session = Depends(get_db)):
+def teams(
+    request: Request,
+    encounter: str = "",
+    objective: str = "maximize_total",
+    plan: str = "",
+    session: Session = Depends(get_db),
+):
     settings = request.app.state.settings
     context = ui_state.resolve_context(settings, session)
     if context.needs_setup:
         return RedirectResponse("/ui", status_code=303)
     adapter = adapter_for(context.active_game)
+    roster_rows = CharacterRepository(session).search(context.active_game, context.player.id)
+    owned = sorted(
+        (c for c in roster_rows if c.owned), key=lambda c: c.display_name.lower()
+    )
+    by_id = {c.id: c for c in roster_rows}
     rows = TeamRepository(session).list_all(
         game_id=context.active_game, player_profile_id=context.player.id
     )
-    by_id = {c.id: c for c in CharacterRepository(session).search(context.active_game, context.player.id)}
     teams_out = []
     for t in rows:
         members = [
-            {"position": m.position, "name": by_id[m.character_id].display_name if m.character_id in by_id else "?"}
+            {
+                "position": m.position,
+                "name": by_id[m.character_id].display_name if m.character_id in by_id else "?",
+                "key": by_id[m.character_id].key if m.character_id in by_id else "",
+            }
             for m in t.members
         ]
-        teams_out.append({"id": t.id, "name": t.name, "is_active": t.is_active, "notes": t.notes, "members": members})
+        teams_out.append(
+            {"id": t.id, "name": t.name, "is_active": t.is_active, "notes": t.notes, "members": members}
+        )
+
+    rules = adapter.team_rules()
+    modes = [
+        {
+            "key": mode.key,
+            "name": mode.name,
+            "slot_count": mode.slot_count,
+            "description": mode.description,
+        }
+        for mode in adapter.encounter_modes()
+    ]
+    if objective not in {"maximize_total", "maximize_clears", "maximize_comfort"}:
+        objective = "maximize_total"
+    selected_mode = next((mode for mode in modes if mode["key"] == encounter), None)
+    if selected_mode is None and modes:
+        selected_mode = modes[0]
+    plan_result = None
+    plan_error = None
+    if plan and selected_mode:
+        try:
+            raw_plan = plan_encounter(
+                session,
+                adapter,
+                context.active_game,
+                context.player.id,
+                selected_mode["key"],
+                objective=objective,
+            )
+            names_by_key = {c.key: c.display_name for c in owned}
+
+            def decorate(allocation: dict | None) -> dict | None:
+                if not allocation:
+                    return None
+                decorated_teams = []
+                for row in allocation.get("teams", []):
+                    decorated_teams.append(
+                        {
+                            **row,
+                            "names": [names_by_key.get(key, key) for key in row.get("members", [])],
+                        }
+                    )
+                return {**allocation, "teams": decorated_teams}
+
+            plan_result = {
+                **raw_plan,
+                "best": decorate(raw_plan.get("best")),
+                "alternatives": [decorate(a) for a in raw_plan.get("alternatives", [])],
+                "greedy_comparison": decorate(raw_plan.get("greedy_comparison")),
+                "slot_labels": [
+                    f"Team {index + 1}" for index in range(raw_plan.get("slot_count", 0))
+                ],
+            }
+        except Exception as exc:  # surfaced as a plain-language notice, never silent
+            plan_error = str(exc)
+
     return _ctx(
-        request, session, adapter.terminology().team + "s", "teams", template="teams.html", teams=teams_out
+        request,
+        session,
+        adapter.terminology().team + "s & endgame",
+        "teams",
+        template="teams.html",
+        teams=teams_out,
+        team_size=max(rules.max_size, 1),
+        team_min=rules.min_size,
+        roster_size=len(owned),
+        member_options=[{"key": c.key, "name": c.display_name} for c in owned],
+        encounter_modes=modes,
+        selected_encounter=selected_mode["key"] if selected_mode else "",
+        selected_objective=objective,
+        plan_result=plan_result,
+        plan_error=plan_error,
+        planning_requested=bool(plan),
+        team_capacity=max(rules.max_size, 1) * (selected_mode["slot_count"] if selected_mode else 1),
     )
 
 
+@router.post("/teams/save")
+async def team_save(request: Request, session: Session = Depends(get_db)):
+    context = ui_state.resolve_context(request.app.state.settings, session)
+    if context.needs_setup:
+        return _redirect("/ui")
+    form = await request.form()
+    name = str(form.get("name") or "").strip()
+    if not name:
+        return _redirect("/ui/teams", "Give the team a name first")
+    refs = [str(value) for value in form.getlist("members") if str(value).strip()]
+    if not refs:
+        return _redirect("/ui/teams", "Pick at least one member")
+    members = [{"character": ref, "position": index} for index, ref in enumerate(refs)]
+    service = TeamService(session, adapter_for(context.active_game))
+    try:
+        service.save_team(
+            context.active_game,
+            context.player.id,
+            name,
+            members,
+            notes=str(form.get("notes") or "").strip() or None,
+            is_active=str(form.get("activate") or "") == "on",
+        )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        return _redirect("/ui/teams", f"Could not save team: {exc}")
+    return _redirect("/ui/teams", f"Team “{name}” saved")
+
+
+@router.post("/teams/{team_id}/delete")
+def team_delete(request: Request, team_id: str, session: Session = Depends(get_db)):
+    context = ui_state.resolve_context(request.app.state.settings, session)
+    if context.needs_setup:
+        return _redirect("/ui")
+    repo = TeamRepository(session)
+    try:
+        team = repo.get_or_raise(team_id, "team")
+        if team.game_id != context.active_game or team.player_profile_id != context.player.id:
+            raise ValueError("team not found for this profile")
+        name = team.name
+        repo.delete(team)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        return _redirect("/ui/teams", f"Could not delete team: {exc}")
+    return _redirect("/ui/teams", f"Team “{name}” deleted")
+
+
+def _float_or_none(raw: str) -> float | None:
+    text = str(raw or "").strip().replace("%", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 @router.get("/gear", response_class=HTMLResponse)
-def gear(request: Request, session: Session = Depends(get_db)):
+def gear(
+    request: Request,
+    cr_a: str = "",
+    cd_a: str = "",
+    cr_b: str = "",
+    cd_b: str = "",
+    crit_character: str = "",
+    session: Session = Depends(get_db),
+):
     settings = request.app.state.settings
     context = ui_state.resolve_context(settings, session)
     if context.needs_setup:
@@ -428,6 +739,16 @@ def gear(request: Request, session: Session = Depends(get_db)):
         c.id: c.display_name
         for c in CharacterRepository(session).search(context.active_game, context.player.id)
     }
+    owned = CharacterRepository(session).search(
+        context.active_game, context.player.id, owned=True
+    )
+    owned_specialties = sorted(
+        {
+            c.data.get("specialty") or (adapter.character_meta(c.key) or {}).get("specialty")
+            for c in owned
+            if (c.data.get("specialty") or (adapter.character_meta(c.key) or {}).get("specialty"))
+        }
+    )
     equipment = EquipmentRepository(session).search(context.active_game, context.player.id)
     gear_rows = GearRepository(session).search(context.active_game, context.player.id)
     catalog_service = CatalogService(session, adapter)
@@ -437,6 +758,40 @@ def gear(request: Request, session: Session = Depends(get_db)):
             set_choices[s["key"]] = s.get("name") or s["key"]
     for e in catalog_service.entries("gear_set"):
         set_choices.setdefault(e.key, e.display_name)
+    rolls = []
+    for g in gear_rows:
+        evaluation = _gear_evaluation(adapter, g, owned_specialties)
+        rolls.append(
+            {
+                "id": g.id,
+                "set_key": g.set_key,
+                "slot": g.slot,
+                "rarity": g.rarity,
+                "level": g.level,
+                "main": _format_stat_value(adapter, g.main_stat_key, g.main_stat_value),
+                "substats": _substat_display(adapter, g),
+                "equipped": characters.get(g.equipped_character_id, ""),
+                "locked": g.locked,
+                "favorite": g.favorite,
+                "verdict": evaluation["verdict"] if evaluation else None,
+                "score": evaluation["score"] if evaluation else None,
+                "reasons": evaluation["reasons"] if evaluation else [],
+            }
+        )
+    crit_values = [_float_or_none(cr_a), _float_or_none(cd_a), _float_or_none(cr_b), _float_or_none(cd_b)]
+    crit_result = None
+    crit_priority = None
+    if all(value is not None for value in crit_values):
+        from game_companion.core.recommendations.crit_compare import compare_crit_builds
+
+        crit_guide = build_guide_for(adapter, crit_character) if crit_character else None
+        crit_priority = (crit_guide or {}).get("substat_priority_raw")
+        crit_result = compare_crit_builds(
+            (crit_values[0], crit_values[1]),
+            (crit_values[2], crit_values[3]),
+            character=crit_character or None,
+            priority_text=crit_priority,
+        )
     return _ctx(
         request,
         session,
@@ -445,6 +800,7 @@ def gear(request: Request, session: Session = Depends(get_db)):
         template="gear.html",
         equipment=[
             {
+                "id": e.id,
                 "display_name": e.display_name,
                 "rarity": e.rarity,
                 "level": e.level,
@@ -454,23 +810,9 @@ def gear(request: Request, session: Session = Depends(get_db)):
             }
             for e in equipment
         ],
-        gear=[
-            {
-                "set_key": g.set_key,
-                "slot": g.slot,
-                "rarity": g.rarity,
-                "level": g.level,
-                "main": (
-                    f"{g.main_stat_key} {g.main_stat_value:g}"
-                    if g.main_stat_key and g.main_stat_value is not None
-                    else (g.main_stat_key or "")
-                ),
-                "substats": len(g.substats or []),
-                "equipped": characters.get(g.equipped_character_id, ""),
-                "locked": g.locked,
-                "favorite": g.favorite,
-            }
-            for g in gear_rows
+        gear=rolls,
+        gear_families=[
+            {"key": family.key, "display": family.display} for family in adapter.gear_families()
         ],
         equipment_noun=adapter.terminology().equipment,
         gear_noun=adapter.terminology().gear,
@@ -480,10 +822,23 @@ def gear(request: Request, session: Session = Depends(get_db)):
         ],
         set_choices=sorted(set_choices.items()),
         character_options=sorted(characters.items()),
+        character_key_options=[
+            {"key": c.key, "name": c.display_name} for c in owned
+        ],
         gear_slots=[
             {"key": s.key, "name": s.name} for s in adapter.gear_slots()
         ],
-        stat_options=[{"key": s.key, "name": s.short or s.name} for s in adapter.stat_definitions()],
+        stat_options=[
+            {"key": s.key, "name": s.short or s.name, "kind": s.kind}
+            for s in adapter.stat_definitions()
+        ],
+        gear_labels={
+            "discard": sum(1 for row in rolls if row["verdict"] == "likely_safe_to_discard"),
+            "strong": sum(1 for row in rolls if row["verdict"] == "strong"),
+        },
+        crit_result=crit_result,
+        crit_inputs={"cr_a": cr_a, "cd_a": cd_a, "cr_b": cr_b, "cd_b": cd_b, "character": crit_character},
+        crit_priority=crit_priority,
     )
 
 
@@ -641,24 +996,21 @@ def gear_equipment_add(
     adapter = adapter_for(context.active_game)
     entry = CatalogService(session, adapter).find("equipment", catalog_key)
     if entry is None:
-        return _redirect("/ui/gear", "Pick an item from the list — import the catalog on the Database page if it is empty")
-    from game_companion.db.models import EquipmentItem
-    from game_companion.utils import utcnow
-
+        return _redirect("/ui/gear", "Pick an item from the list — import the catalog on the Games page if it is empty")
     try:
-        EquipmentRepository(session).add(
-            EquipmentItem(
-                game_id=context.active_game,
-                player_profile_id=context.player.id,
-                key=entry.key,
-                display_name=entry.display_name,
-                rarity=entry.rarity,
-                level=int(level) if level.strip() else None,
-                refinement=int(refinement) if refinement.strip() else None,
-                equipped_character_id=equipped_character_id or None,
-                source="catalog",
-                last_verified_at=utcnow(),
-            )
+        EquipmentService(session, adapter).create(
+            context.active_game,
+            context.player.id,
+            {
+                "key": entry.key,
+                "display_name": entry.display_name,
+                "rarity": entry.rarity,
+                "level": int(level) if level.strip() else None,
+                "refinement": int(refinement) if refinement.strip() else None,
+                "character": equipped_character_id or None,
+                "source": "catalog",
+                "verified": True,
+            },
         )
         session.commit()
     except Exception as exc:
@@ -668,50 +1020,264 @@ def gear_equipment_add(
 
 
 @router.post("/gear/gear/add")
-def gear_gear_add(
-    request: Request,
-    set_key: str = Form(...),
-    slot: str = Form(...),
-    rarity: str = Form(""),
-    level: str = Form(""),
-    main_stat_key: str = Form(""),
-    main_stat_value: str = Form(""),
-    equipped_character_id: str = Form(""),
-    session: Session = Depends(get_db),
-):
-    """Record one owned gear piece (disc/relic/cartridge) with its rolled stats."""
+async def gear_gear_add(request: Request, session: Session = Depends(get_db)):
+    """Record one owned gear piece (disc/relic/cartridge) with rolled stats."""
     context = ui_state.resolve_context(request.app.state.settings, session)
     if context.needs_setup:
         return _redirect("/ui")
     adapter = adapter_for(context.active_game)
+    form = await request.form()
+    slot = str(form.get("slot") or "").strip()
     valid_slots = {s.key for s in adapter.gear_slots()}
     if slot not in valid_slots:
         return _redirect("/ui/gear", "Pick a slot from the list")
-    from game_companion.db.models import GearItem
-    from game_companion.utils import utcnow
-
+    main_key = str(form.get("main_stat_key") or "").strip()
     try:
-        GearRepository(session).add(
-            GearItem(
-                game_id=context.active_game,
-                player_profile_id=context.player.id,
-                set_key=set_key,
-                slot=slot,
-                gear_type=adapter.gear_families()[0].key if adapter.gear_families() else "gear",
-                rarity=int(rarity) if rarity.strip() else None,
-                level=int(level) if level.strip() else None,
-                main_stat_key=main_stat_key or None,
-                main_stat_value=float(main_stat_value) if main_stat_value.strip() else None,
-                equipped_character_id=equipped_character_id or None,
-                source="manual",
-                last_verified_at=utcnow(),
-            )
+        main_value = _input_stat_value(adapter, main_key, str(form.get("main_stat_value") or ""))
+    except ValueError:
+        return _redirect("/ui/gear", "Main stat value must be a number")
+    try:
+        GearService(session, adapter).create(
+            context.active_game,
+            context.player.id,
+            {
+                "gear_type": str(form.get("gear_type") or "").strip() or None,
+                "set_key": str(form.get("set_key") or "").strip() or None,
+                "slot": slot,
+                "rarity": _rarity_value(str(form.get("rarity") or "")),
+                "level": int(str(form.get("level") or "").strip()) if str(form.get("level") or "").strip() else None,
+                "main_stat_key": main_key or None,
+                "main_stat_value": main_value,
+                "substats": _substats_from_form(adapter, form),
+                "character": str(form.get("equipped_character_id") or "").strip() or None,
+                "source": "manual",
+                "verified": True,
+            },
         )
         session.commit()
     except Exception as exc:
         session.rollback()
         return _redirect("/ui/gear", f"Could not add: {exc}")
     return _redirect("/ui/gear", "Piece added")
+
+
+def _inventory_choices(session: Session, adapter, game_id: str, player_id: str) -> dict:
+    characters = {
+        c.id: c.display_name
+        for c in CharacterRepository(session).search(game_id, player_id)
+    }
+    catalog_service = CatalogService(session, adapter)
+    set_choices: dict[str, str] = {}
+    for row in adapter.gear_sets():
+        if isinstance(row, dict) and row.get("key"):
+            set_choices[str(row["key"])] = str(row.get("name") or row["key"])
+    for entry in catalog_service.entries("gear_set"):
+        set_choices.setdefault(entry.key, entry.display_name)
+    return {
+        "characters": characters,
+        "set_choices": sorted(set_choices.items()),
+        "gear_slots": [{"key": slot.key, "name": slot.name} for slot in adapter.gear_slots()],
+        "stat_options": [
+            {"key": stat.key, "name": stat.short or stat.name, "kind": stat.kind}
+            for stat in adapter.stat_definitions()
+        ],
+        "gear_families": [
+            {"key": family.key, "display": family.display} for family in adapter.gear_families()
+        ],
+        "catalog_equipment": [
+            {"key": entry.key, "display_name": entry.display_name, "rarity": entry.rarity}
+            for entry in catalog_service.entries("equipment")
+        ],
+    }
+
+
+@router.get("/gear/gear/{gear_id}/edit", response_class=HTMLResponse)
+def gear_edit(
+    request: Request, gear_id: str, session: Session = Depends(get_db)
+):
+    early = _needs_setup_redirect(request, session)
+    if early:
+        return early
+    context = ui_state.resolve_context(request.app.state.settings, session)
+    adapter = adapter_for(context.active_game)
+    try:
+        item = GearService(session, adapter).gear.get_or_raise(gear_id, "gear item")
+    except Exception:
+        return _redirect("/ui/gear", "Gear piece not found")
+    if item.game_id != context.active_game or item.player_profile_id != context.player.id:
+        return _redirect("/ui/gear", "Gear piece not found")
+    stat_by_key = _stat_lookup(adapter)
+    substat_rows = []
+    for sub in item.substats or []:
+        if not isinstance(sub, dict):
+            continue
+        key = sub.get("key")
+        value = sub.get("value")
+        stat = stat_by_key.get(key)
+        display = value
+        if stat is not None and stat.kind == "percent" and value is not None:
+            display = round(float(value) * 100, 4) if abs(float(value)) <= 1 else value
+        substat_rows.append({"key": key, "value": display})
+    while len(substat_rows) < 6:
+        substat_rows.append({"key": "", "value": ""})
+    main_value_input = item.main_stat_value
+    main_stat = stat_by_key.get(item.main_stat_key)
+    if main_stat is not None and main_stat.kind == "percent" and main_value_input is not None:
+        main_value_input = (
+            round(float(main_value_input) * 100, 4)
+            if abs(float(main_value_input)) <= 1
+            else main_value_input
+        )
+    choices = _inventory_choices(session, adapter, context.active_game, context.player.id)
+    return _ctx(
+        request,
+        session,
+        f"Edit {adapter.terminology().gear}",
+        "gear",
+        template="gear_edit.html",
+        selected=item,
+        substat_rows=substat_rows[:6],
+        main_stat_value_input=main_value_input if main_value_input is not None else "",
+        selected_character=item.equipped_character_id or "",
+        gear_noun=adapter.terminology().gear,
+        **choices,
+    )
+
+
+@router.post("/gear/gear/{gear_id}/edit")
+async def gear_edit_save(request: Request, gear_id: str, session: Session = Depends(get_db)):
+    context = ui_state.resolve_context(request.app.state.settings, session)
+    if context.needs_setup:
+        return _redirect("/ui")
+    adapter = adapter_for(context.active_game)
+    service = GearService(session, adapter)
+    try:
+        item = service.gear.get_or_raise(gear_id, "gear item")
+        if item.game_id != context.active_game or item.player_profile_id != context.player.id:
+            return _redirect("/ui/gear", "Gear piece not found")
+        form = await request.form()
+        main_key = str(form.get("main_stat_key") or "").strip() or None
+        try:
+            main_value = _input_stat_value(adapter, main_key or "", str(form.get("main_stat_value") or ""))
+        except ValueError:
+            return _redirect(f"/ui/gear/gear/{item.id}/edit", "Main stat value must be a number")
+        payload = {
+            "set_key": str(form.get("set_key") or "").strip() or item.set_key,
+            "slot": str(form.get("slot") or "").strip() or item.slot,
+            "rarity": _rarity_value(str(form.get("rarity") or "")),
+            "level": int(str(form.get("level") or "").strip()) if str(form.get("level") or "").strip() else None,
+            "main_stat_key": main_key,
+            "main_stat_value": main_value,
+            "substats": _substats_from_form(adapter, form),
+            "locked": str(form.get("locked") or "") == "on",
+            "favorite": str(form.get("favorite") or "") == "on",
+            "notes": str(form.get("notes") or "").strip() or None,
+            "verified": True,
+        }
+        character = str(form.get("equipped_character_id") or "").strip()
+        if character:
+            payload["character"] = character
+        else:
+            payload["unset_character"] = True
+        service.update(item, payload)
+        # The service treats None as "not supplied"; editing must be able to
+        # explicitly clear optional fields as well.
+        item.main_stat_key = main_key
+        item.main_stat_value = main_value
+        item.rarity = payload["rarity"]
+        item.level = payload["level"]
+        item.notes = payload["notes"]
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        return _redirect(f"/ui/gear/gear/{gear_id}/edit", f"Could not save: {exc}")
+    return _redirect("/ui/gear", "Gear piece updated")
+
+
+@router.post("/gear/gear/{gear_id}/delete")
+def gear_delete(request: Request, gear_id: str, session: Session = Depends(get_db)):
+    context = ui_state.resolve_context(request.app.state.settings, session)
+    if context.needs_setup:
+        return _redirect("/ui")
+    service = GearService(session, adapter_for(context.active_game))
+    try:
+        item = service.gear.get_or_raise(gear_id, "gear item")
+        if item.game_id != context.active_game or item.player_profile_id != context.player.id:
+            raise ValueError("gear item not found")
+        service.gear.delete(item)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        return _redirect("/ui/gear", f"Could not delete: {exc}")
+    return _redirect("/ui/gear", "Gear piece deleted")
+
+
+@router.get("/gear/equipment/{item_id}/edit", response_class=HTMLResponse)
+def equipment_edit(
+    request: Request, item_id: str, session: Session = Depends(get_db)
+):
+    early = _needs_setup_redirect(request, session)
+    if early:
+        return early
+    context = ui_state.resolve_context(request.app.state.settings, session)
+    adapter = adapter_for(context.active_game)
+    try:
+        item = EquipmentService(session, adapter).equipment.get_or_raise(item_id, "equipment item")
+    except Exception:
+        return _redirect("/ui/gear", "Equipment not found")
+    if item.game_id != context.active_game or item.player_profile_id != context.player.id:
+        return _redirect("/ui/gear", "Equipment not found")
+    characters = {
+        c.id: c.display_name
+        for c in CharacterRepository(session).search(context.active_game, context.player.id)
+    }
+    return _ctx(
+        request,
+        session,
+        f"Edit {item.display_name}",
+        "gear",
+        template="equipment_edit.html",
+        selected=item,
+        character_options=sorted(characters.items()),
+        selected_character=item.equipped_character_id or "",
+        equipment_noun=adapter.terminology().equipment,
+    )
+
+
+@router.post("/gear/equipment/{item_id}/edit")
+async def equipment_edit_save(request: Request, item_id: str, session: Session = Depends(get_db)):
+    context = ui_state.resolve_context(request.app.state.settings, session)
+    if context.needs_setup:
+        return _redirect("/ui")
+    adapter = adapter_for(context.active_game)
+    service = EquipmentService(session, adapter)
+    try:
+        item = service.equipment.get_or_raise(item_id, "equipment item")
+        if item.game_id != context.active_game or item.player_profile_id != context.player.id:
+            return _redirect("/ui/gear", "Equipment not found")
+        form = await request.form()
+        character = str(form.get("equipped_character_id") or "").strip()
+        payload = {
+            "display_name": str(form.get("display_name") or "").strip() or item.display_name,
+            "level": int(str(form.get("level") or "").strip()) if str(form.get("level") or "").strip() else None,
+            "refinement": int(str(form.get("refinement") or "").strip()) if str(form.get("refinement") or "").strip() else None,
+            "locked": str(form.get("locked") or "") == "on",
+            "notes": str(form.get("notes") or "").strip() or None,
+            "verified": True,
+        }
+        if character:
+            payload["character"] = character
+        else:
+            payload["unset_character"] = True
+        service.update(item, payload)
+        # Explicitly allow clearing level/refinement, which the service skips as None.
+        item.level = payload["level"]
+        item.refinement = payload["refinement"]
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        return _redirect(f"/ui/gear/equipment/{item_id}/edit", f"Could not save: {exc}")
+    return _redirect("/ui/gear", "Equipment updated")
 
 
 @router.get("/trackers", response_class=HTMLResponse)
@@ -1166,6 +1732,11 @@ def character_edit(request: Request, ref: str, session: Session = Depends(get_db
 
     record = character_dict(char)
     record["skills"] = dict(record["skills"])
+    try:
+        loadout = _loadout_context(session, adapter, char, service)
+    except Exception:
+        loadout = {"active_build": None, "equipment_options": [], "gear_options": [],
+                   "filled_slots": 0, "total_slots": max(len(adapter.gear_slots()), 1)}
     return _ctx(
         request,
         session,
@@ -1177,6 +1748,10 @@ def character_edit(request: Request, ref: str, session: Session = Depends(get_db
         skill_defs={d.key: d.name for d in adapter.skill_definitions()},
         dupe_term=adapter.terminology().duplication,
         char_term=adapter.terminology().character,
+        equipment_noun=adapter.terminology().equipment,
+        gear_noun=adapter.terminology().gear,
+        loadout=loadout,
+        build_guide=build_guide_for(adapter, char.key),
     )
 
 
@@ -1232,6 +1807,42 @@ async def character_edit_save(request: Request, ref: str, session: Session = Dep
         session.rollback()
         return _redirect(f"/ui/roster/{char.key}/edit", f"Save failed: {exc}")
     return _redirect(f"/ui/roster/{char.key}/edit", f"{char.display_name} saved (verified today)")
+
+
+@router.post("/roster/{ref}/loadout")
+async def character_loadout_save(request: Request, ref: str, session: Session = Depends(get_db)):
+    context = ui_state.resolve_context(request.app.state.settings, session)
+    if context.needs_setup:
+        return _redirect("/ui")
+    adapter = adapter_for(context.active_game)
+    service = RosterService(session, adapter)
+    try:
+        char = service.resolve_character(context.active_game, context.player.id, ref)
+    except Exception:
+        return _redirect("/ui/roster", "Character not found")
+
+    form = await request.form()
+    try:
+        build = service.active_build(char)
+        if build is None:
+            build = next((b for b in service.builds.for_character(char.id) if b.name == "default"), None)
+            if build is None:
+                build = service.create_build(char, "default")
+        moved: list[str] = []
+        equipment_id = str(form.get("equipment_item_id") or "").strip() or None
+        service.set_build_equipment(build, equipment_id)
+        for slot in adapter.gear_slots():
+            gear_id = str(form.get(f"slot_{slot.key}") or "").strip() or None
+            result = service.set_build_slot(build, slot.key, gear_id)
+            moved.extend(result.get("moves") or [])
+        result = service.activate_build(build)
+        moved.extend(result.get("moves") or [])
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        return _redirect(f"/ui/roster/{char.key}/edit", f"Could not save loadout: {exc}")
+    extra = f" ({'; '.join(dict.fromkeys(moved))})" if moved else ""
+    return _redirect(f"/ui/roster/{char.key}/edit", f"Loadout saved{extra}")
 
 
 @router.post("/resources/update")

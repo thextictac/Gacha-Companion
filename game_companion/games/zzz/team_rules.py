@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from game_companion.core.games.base import (
+    LABEL_CONSENSUS,
     LABEL_HEURISTIC,
     ScoreComponent,
     TeamRules,
@@ -13,7 +14,8 @@ from game_companion.core.games.base import (
 
 
 def score_team(
-    member_keys: Sequence[str], meta_lookup, context: Mapping[str, Any]
+    member_keys: Sequence[str], meta_lookup, context: Mapping[str, Any],
+    meta_teams: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[ScoreComponent]:
     """Heuristic ZZZ team components. No DPS is claimed anywhere."""
     metas = [meta_lookup(k) or {} for k in member_keys]
@@ -65,7 +67,37 @@ def score_team(
                 else "comfort preference: demanding composition for this player",
             )
         )
+    if meta_teams:
+        components.append(published_team_fit(member_keys, meta_teams))
     return components
+
+
+def published_team_fit(member_keys: Sequence[str], meta_teams: Sequence[Mapping[str, Any]]) -> ScoreComponent:
+    """Reward teams that match a published Prydwen archetype (CONSENSUS data).
+
+    This is deliberately not a DPS claim: it only measures overlap with teams
+    people actually use in published build data.
+    """
+    members = set(member_keys)
+    if not members:
+        return ScoreComponent("published_team_fit", 0.0, 10, LABEL_CONSENSUS, "no members")
+    best: tuple[int, str] | None = None
+    for team in meta_teams:
+        team_members = set(team.get("members") or [])
+        score = len(members & team_members)
+        if best is None or score > best[0]:
+            best = (score, str(team.get("name") or team.get("key") or "published team"))
+    if best is None:
+        return ScoreComponent("published_team_fit", 0.0, 10, LABEL_CONSENSUS, "no published archetypes available")
+    overlap, name = best
+    value = 10.0 * overlap / max(len(members), 1)
+    if overlap == len(members):
+        detail = f"matches published team '{name}' ({overlap}/{len(members)})"
+    elif overlap:
+        detail = f"shares {overlap}/{len(members)} members with published team '{name}'"
+    else:
+        detail = "no overlap with published team archetypes"
+    return ScoreComponent("published_team_fit", value, 10, LABEL_CONSENSUS, detail)
 
 
 def _is_double_anomaly(specialties: Sequence[str | None]) -> bool:

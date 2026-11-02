@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>Edit {{ gear_noun }}</h1>
+  <a class="button" href="/ui/gear">Back to inventory</a>
+</div>
+
+<form method="post" action="/ui/gear/gear/{{ selected.id }}/edit">
+  <section class="card">
+    <h2>{{ selected.set_key or 'Unnamed set' }} · slot {{ selected.slot }}</h2>
+    <div class="grid2">
+      <p><label>Set<br>
+        <select name="set_key">
+          <option value="">— no set —</option>
+          {% for key, name in set_choices %}
+          <option value="{{ key }}" {% if selected.set_key == key %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+      </label></p>
+      <p><label>Slot<br>
+        <select name="slot">
+          {% for slot in gear_slots %}
+          <option value="{{ slot.key }}" {% if selected.slot == slot.key %}selected{% endif %}>{{ slot.name }}</option>
+          {% endfor %}
+        </select>
+      </label></p>
+      <p><label>Rarity<br><input type="text" name="rarity" value="{{ selected.rarity if selected.rarity is not none else '' }}" style="max-width:6rem"></label></p>
+      <p><label>Level<br><input type="text" name="level" value="{{ selected.level if selected.level is not none else '' }}" style="max-width:6rem"></label></p>
+    </div>
+    <div class="grid2">
+      <p><label>Main stat<br>
+        <select name="main_stat_key">
+          <option value="">— none —</option>
+          {% for stat in stat_options %}
+          <option value="{{ stat.key }}" {% if selected.main_stat_key == stat.key %}selected{% endif %}>{{ stat.name }}</option>
+          {% endfor %}
+        </select>
+      </label></p>
+      <p><label>Main value <span class="muted">(24% or 0.24)</span><br>
+        <input type="text" name="main_stat_value" value="{{ main_stat_value_input }}" style="max-width:8rem">
+      </label></p>
+    </div>
+    <p><label>Equipped by<br>
+      <select name="equipped_character_id">
+        <option value="">— not equipped —</option>
+        {% for cid, cname in character_options %}
+        <option value="{{ cid }}" {% if selected_character == cid %}selected{% endif %}>{{ cname }}</option>
+        {% endfor %}
+      </select>
+    </label></p>
+    <p>
+      <label><input type="checkbox" name="locked" {% if selected.locked %}checked{% endif %}> Locked</label>
+      &nbsp;&nbsp;
+      <label><input type="checkbox" name="favorite" {% if selected.favorite %}checked{% endif %}> Favorite</label>
+    </p>
+    <p><label>Notes<br><textarea name="notes" rows="2" style="width:100%">{{ selected.notes or '' }}</textarea></label></p>
+  </section>
+
+  <section class="card">
+    <h2>Substats</h2>
+    <p class="muted">Percent stats accept 24 or 24%; flat stats accept the raw number.</p>
+    <div class="grid2">
+      {% for row in substat_rows %}
+      <div class="inline-row">
+        <select name="substat_key_{{ loop.index }}">
+          <option value="">— substat {{ loop.index }} —</option>
+          {% for stat in stat_options %}
+          <option value="{{ stat.key }}" {% if row.key == stat.key %}selected{% endif %}>{{ stat.name }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="substat_value_{{ loop.index }}" value="{{ row.value }}" placeholder="Value" style="max-width:7rem">
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <p><button type="submit">Save changes</button></p>
+</form>
+
+<form method="post" action="/ui/gear/gear/{{ selected.id }}/delete" data-confirm="Delete this piece? This cannot be undone." class="inline-row">
+  <button type="submit" class="danger">Delete this piece</button>
+</form>
+{% endblock %}

@@ -139,6 +139,11 @@ def test_home_banner_hero_hides_undated_banners(client, player):
 
 
 def test_banner_art_opens_full_size_preview(client, player):
+    from datetime import timedelta
+
+    from game_companion.utils import utcnow
+
+    now = utcnow()
     _seed_banner(
         client,
         {
@@ -146,8 +151,8 @@ def test_banner_art_opens_full_size_preview(client, player):
             "section": "current",
             "kind": "character",
             "banner_type": "new",
-            "starts_at": "2026-09-09T03:00:00+00:00",
-            "ends_at": "2026-09-30T16:59:00+00:00",
+            "starts_at": (now - timedelta(days=3)).isoformat(),
+            "ends_at": (now + timedelta(days=10)).isoformat(),
             "art": "https://cdn.prydwen.gg/images/zenless-zone-zero/banners/x.webp",
             "featured": [],
         },

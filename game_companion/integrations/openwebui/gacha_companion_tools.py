@@ -132,6 +132,21 @@ class Tools:
         per-slot gear). Use for 'what is my X running?' questions."""
         return self._call(__event_call, "GET", f"/games/{self._game()}/characters/{character}{self._player_param()}")
 
+    def get_build_guide(self, character: str, __event_call: Callable | None = None) -> str:
+        """Get the published public build guide for one character: recommended
+        sets, main stats, substat priority, source and patch. Use for build
+        priority questions. If available is false, do not invent priorities."""
+        return self._call(__event_call, "GET", f"/games/{self._game()}/characters/{character}/build-guide{self._player_param()}")
+
+    def plan_endgame(
+        self, encounter_key: str, objective: str = "maximize_total",
+        __event_call: Callable | None = None,
+    ) -> str:
+        """Split the real roster into non-overlapping teams for an endgame mode.
+        Call list_encounters / list_teams first when uncertain. Scores are
+        heuristics, never DPS percentages."""
+        return self._call(__event_call, "POST", f"/games/{self._game()}/recommendations/optimize{self._player_param()}", {"encounter_key": encounter_key, "objective": objective})
+
     def update_build(
         self, character: str, build_updates: dict[str, Any], __event_call: Callable | None = None
     ) -> str:

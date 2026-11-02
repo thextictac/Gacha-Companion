@@ -212,3 +212,29 @@ def activate_build(
     service.resolve_character(game_id, player.id, ref)
     build = _get_build(service, game_id, player.id, build_id)
     return service.activate_build(build)
+
+
+@router.get("/{ref}/build-guide")
+def get_build_guide(
+    game_id: str,
+    ref: str,
+    session: Session = Depends(get_db),
+    player=Depends(resolve_player),
+):
+    """Published build guide for one character, with provenance.
+
+    Absent data is a 200 with ``available: false`` rather than an inventing
+    fallback, so clients can be honest with the player.
+    """
+    from game_companion.core.recommendations.build_guide import build_guide
+
+    service, _ = _service(session, game_id)
+    char = service.resolve_character(game_id, player.id, ref)
+    guide = build_guide(adapter_for(game_id), char.key)
+    if guide is None:
+        return {
+            "available": False,
+            "character": char.key,
+            "note": "No public build-guide data is packaged for this game yet.",
+        }
+    return {"available": True, "character": char.key, **guide}

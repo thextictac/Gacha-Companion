@@ -154,6 +154,69 @@ def viable_member_keys(session: Session, game_id: str, player_id: str) -> list[s
     ]
 
 
+def _rarity_number(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return {"S": 4.0, "A": 3.0, "B": 2.0}.get(str(value or "").upper(), 0.0)
+
+
+def rank_member_keys(
+    session: Session,
+    adapter: GameAdapter,
+    game_id: str,
+    player_id: str,
+    *,
+    keys: Sequence[str] | None = None,
+    limit: int | None = None,
+) -> list[str]:
+    """Order a roster for truncation instead of taking whatever is alphabetical.
+
+    The optimizer/team recommender only evaluate a bounded candidate pool; a
+    player's best characters must not fall outside that pool just because their
+    names start late in the alphabet. This is a deterministic prioritization,
+    not another team score.
+    """
+    owned = CharacterRepository(session).search(game_id, player_id, owned=True)
+    wanted = set(keys) if keys is not None else None
+    if wanted is not None:
+        owned = [c for c in owned if c.key in wanted]
+    if not owned:
+        return []
+    ratings: dict[str, float] = {}
+    try:
+        meta = adapter.gear_meta()
+        for row in meta.get("agents", []) if isinstance(meta, dict) else []:
+            if isinstance(row, dict) and row.get("key"):
+                try:
+                    ratings[str(row["key"])] = float(row.get("rating") or 0.0)
+                except (TypeError, ValueError):
+                    pass
+    except Exception:  # optional adapter metadata must never break planning
+        ratings = {}
+    ranked: list[tuple[float, str]] = []
+    for char in owned:
+        readiness = build_readiness(session, adapter, char)
+        hint = ratings.get(char.key)
+        if hint is None:
+            meta_row = adapter.character_meta(char.key) or {}
+            try:
+                hint = float(meta_row.get("rating") or 0.0)
+            except (TypeError, ValueError):
+                hint = 0.0
+        value = (
+            float(hint or 0.0) * 1.5
+            + readiness.value
+            + (float(char.level or 0) / 20.0)
+            + _rarity_number(char.rarity) * 0.5
+            + (0.75 if char.favorite else 0.0)
+            + float(char.duplication_level or 0) * 0.15
+        )
+        ranked.append((value, char.key))
+    ranked.sort(key=lambda row: (-row[0], row[1]))
+    result = [key for _, key in ranked]
+    return result[:limit] if limit is not None else result
+
+
 def enumerate_candidate_teams(
     member_keys: Sequence[str], team_size: int, max_candidates: int = 120
 ) -> list[tuple[str, ...]]:

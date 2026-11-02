@@ -37,6 +37,8 @@ HONESTY_RULES = (
     "- Unknown data stays unknown: say what is not recorded rather than "
     "guessing numbers.\n"
     "- Scores and ratings you see are labeled heuristics, not measured DPS.\n"
+    "- Build guides are CONSENSUS summaries of published sources; present them as\n"
+    "  guidance, not as verified game formulas or guarantees.\n"
     "- Use the game's own terms as given in the terminology section.\n"
     "- You may propose saving a lasting player preference with propose_memory; "
     "it is stored visibly and the player can edit or delete it."
@@ -302,6 +304,100 @@ class ChatService:
             {
                 "type": "function",
                 "function": {
+                    "name": "list_encounters",
+                    "description": "Endgame modes/encounters available for this game (save slots and team count).",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "recommend_teams",
+                    "description": f"Rank the best owned {term.team.lower()}s using synergy, encounter fit, build readiness and comfort. Use for 'what should I run?' questions.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "encounter": {"type": "string", "description": "Optional encounter key from list_encounters"},
+                            "count": {"type": "integer", "description": "How many alternatives (1-10)"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "plan_endgame",
+                    "description": f"Build a multi-{term.team.lower()} endgame split (2-3 slots) from the player's owned {term.character_plural.lower()}, ensuring nobody is used twice.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "encounter_key": {"type": "string", "description": "Encounter/mode key from list_encounters"},
+                            "objective": {
+                                "type": "string",
+                                "enum": ["maximize_total", "maximize_clears", "maximize_comfort"],
+                            },
+                        },
+                        "required": ["encounter_key"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "evaluate_gear",
+                    "description": f"Whole-inventory {term.gear.lower()} check: best free pieces per {term.character.lower()} and safe-to-discard candidates.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "compare_equipment",
+                    "description": f"Compare owned {term.equipment_plural.lower()} for one {term.character.lower()}, including the current pick and easiest upgrade.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "character": {"type": "string"},
+                            "item_ids": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["character"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_upgrade_plan",
+                    "description": "Prioritized, reasoned upgrade actions from stored levels, skills and build completeness.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "audit_roster",
+                    "description": "Find missing/weak data and incomplete builds for one character or the whole owned roster.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"character": {"type": "string", "description": "Optional key or name"}},
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_build_guide",
+                    "description": f"Published build guide for one {term.character.lower()}: sets, main stats, substat priority, source and patch. Returns an honest 'unavailable' result when the game has no build data.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"character": {"type": "string"}},
+                        "required": ["character"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "get_resources",
                     "description": "Resource counters with deterministic plan-based statuses.",
                     "parameters": {"type": "object", "properties": {}},
@@ -416,6 +512,102 @@ class ChatService:
                 }
                 for t in TeamRepository(self.session).list_all(game_id=game_id, player_profile_id=self.player_id)
             ]
+        if name == "list_encounters":
+            return [
+                {
+                    "key": mode.key,
+                    "name": mode.name,
+                    "slot_count": mode.slot_count,
+                    "description": mode.description,
+                }
+                for mode in self.adapter.encounter_modes()
+            ]
+        if name == "recommend_teams":
+            from game_companion.core.recommendations.team_recs import recommend_teams
+
+            count = max(1, min(int(args.get("count") or 5), 10))
+            return recommend_teams(
+                self.session,
+                self.adapter,
+                game_id,
+                self.player_id,
+                encounter=str(args.get("encounter") or "").strip() or None,
+                count=count,
+            )
+        if name == "plan_endgame":
+            from game_companion.core.teams.endgame import plan_encounter
+
+            encounter_key = str(args.get("encounter_key") or "").strip()
+            if not encounter_key:
+                raise ValidationError("encounter_key is required (see list_encounters)")
+            objective = str(args.get("objective") or "maximize_total")
+            if objective not in {"maximize_total", "maximize_clears", "maximize_comfort"}:
+                raise ValidationError("objective must be maximize_total, maximize_clears or maximize_comfort")
+            plan = plan_encounter(
+                self.session, self.adapter, game_id, self.player_id, encounter_key,
+                objective=objective,
+            )
+            names = {
+                c.key: c.display_name
+                for c in CharacterRepository(self.session).search(game_id, self.player_id)
+            }
+
+            def decorate(allocation):
+                if not allocation:
+                    return None
+                return {
+                    **allocation,
+                    "teams": [
+                        {**team, "names": [names.get(key, key) for key in team.get("members", [])]}
+                        for team in allocation.get("teams", [])
+                    ],
+                }
+
+            plan["best"] = decorate(plan.get("best"))
+            plan["alternatives"] = [decorate(a) for a in plan.get("alternatives", [])]
+            plan["greedy_comparison"] = decorate(plan.get("greedy_comparison"))
+            return plan
+        if name == "evaluate_gear":
+            from game_companion.core.recommendations.gear_eval import evaluate_inventory
+
+            return evaluate_inventory(self.session, self.adapter, game_id, self.player_id)
+        if name == "compare_equipment":
+            from game_companion.core.recommendations.team_recs import compare_equipment
+
+            roster = RosterService(self.session, self.adapter)
+            char = roster.resolve_character(game_id, self.player_id, str(args.get("character") or ""))
+            item_ids = args.get("item_ids") or None
+            return compare_equipment(
+                self.session, self.adapter, game_id, self.player_id, char,
+                item_ids=[str(value) for value in item_ids] if item_ids else None,
+            )
+        if name == "get_upgrade_plan":
+            from game_companion.core.recommendations.planner import build_upgrade_plan
+
+            return build_upgrade_plan(self.session, self.adapter, game_id, self.player_id)
+        if name == "audit_roster":
+            from game_companion.core.recommendations.planner import audit_roster
+
+            ref = str(args.get("character") or "").strip()
+            char = (
+                RosterService(self.session, self.adapter).resolve_character(game_id, self.player_id, ref)
+                if ref
+                else None
+            )
+            return audit_roster(self.session, self.adapter, game_id, self.player_id, char)
+        if name == "get_build_guide":
+            from game_companion.core.recommendations.build_guide import build_guide
+
+            ref = str(args.get("character") or "").strip()
+            char = RosterService(self.session, self.adapter).resolve_character(game_id, self.player_id, ref)
+            guide = build_guide(self.adapter, char.key)
+            if guide is None:
+                return {
+                    "available": False,
+                    "character": char.key,
+                    "note": "No public build-guide data is packaged for this game yet; do not invent stat priorities.",
+                }
+            return {"available": True, "character": char.key, **guide}
         if name == "get_resources":
             from game_companion.core.resources.service import ResourceService
 

@@ -9,7 +9,7 @@
   <h2>{{ equipment_noun }}</h2>
   {% if equipment %}
   <table>
-    <thead><tr><th>Name</th><th>Rarity</th><th>Level</th><th>Stars</th><th>Equipped by</th><th>Locked</th></tr></thead>
+    <thead><tr><th>Name</th><th>Rarity</th><th>Level</th><th>Stars</th><th>Equipped by</th><th>Locked</th><th></th></tr></thead>
     <tbody>
       {% for e in equipment %}
       <tr>
@@ -19,6 +19,7 @@
         <td class="num-cell">{{ e.refinement if e.refinement is not none else '—' }}</td>
         <td>{{ e.equipped or '—' }}</td>
         <td>{% if e.locked %}🔒{% else %}·{% endif %}</td>
+        <td><a href="/ui/gear/equipment/{{ e.id }}/edit">Edit</a></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -55,8 +56,10 @@
 <section class="card">
   <h2>{{ gear_noun }}</h2>
   {% if gear %}
+  <p class="muted small">{{ gear_labels.strong }} strong pieces · {{ gear_labels.discard }} likely safe to discard.
+  Scores are adapter heuristics, never DPS claims.</p>
   <table>
-    <thead><tr><th>Set</th><th>Slot</th><th>Rarity</th><th>Level</th><th>Main stat</th><th>Subs</th><th>Equipped by</th><th>Flags</th></tr></thead>
+    <thead><tr><th>Set</th><th>Slot</th><th>Rarity</th><th>Level</th><th>Main stat</th><th>Substats</th><th>Equipped by</th><th>Grade</th><th>Flags</th><th></th></tr></thead>
     <tbody>
       {% for g in gear %}
       <tr>
@@ -64,10 +67,21 @@
         <td>{{ g.slot or '—' }}</td>
         <td>{{ g.rarity or '—' }}</td>
         <td class="num-cell">{{ g.level if g.level is not none else '—' }}</td>
-        <td>{{ g.main or '—' }}</td>
-        <td class="num-cell">{{ g.substats }}</td>
+        <td>{{ g.main }}</td>
+        <td>
+          {% for sub in g.substats %}
+          <span class="chip chip-gray">{{ sub.text }}</span>
+          {% else %}<span class="muted">none recorded</span>{% endfor %}
+        </td>
         <td>{{ g.equipped or '—' }}</td>
+        <td>
+          {% if g.verdict %}
+          <span class="chip {% if g.verdict == 'strong' %}chip-cyan{% elif g.verdict == 'likely_safe_to_discard' %}chip-red{% elif g.verdict == 'weak' %}chip-orange{% else %}chip-gray{% endif %}">{{ g.verdict.replace('_', ' ') }}</span>
+          <span class="muted small">{{ g.score }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
         <td>{% if g.locked %}🔒{% endif %} {% if g.favorite %}★{% endif %}</td>
+        <td><a href="/ui/gear/gear/{{ g.id }}/edit">Edit</a></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -75,36 +89,104 @@
   {% else %}<p class="muted">No {{ gear_noun|lower }} recorded yet — add your first piece below.</p>{% endif %}
 
   <h3>Add a {{ gear_noun|lower }}</h3>
-  <p class="muted">Record one piece: pick its set and slot, then the stats it rolled.</p>
-  <form method="post" action="/ui/gear/gear/add" class="inline-row">
-    <select name="set_key" required>
-      <option value="">— set —</option>
-      {% for key, name in set_choices %}
-      <option value="{{ key }}">{{ name }}</option>
+  <p class="muted">Record one piece: pick its set and slot, then every stat it rolled.
+  Percent stats accept <code>24</code> or <code>24%</code>.</p>
+  <form method="post" action="/ui/gear/gear/add">
+    <div class="inline-row">
+      {% if gear_families|length > 1 %}
+      <select name="gear_type">
+        {% for family in gear_families %}
+        <option value="{{ family.key }}">{{ family.display }}</option>
+        {% endfor %}
+      </select>
+      {% else %}
+      <input type="hidden" name="gear_type" value="{{ gear_families[0].key if gear_families else '' }}">
+      {% endif %}
+      <select name="set_key" required>
+        <option value="">— set —</option>
+        {% for key, name in set_choices %}
+        <option value="{{ key }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+      <select name="slot" required>
+        <option value="">— slot —</option>
+        {% for s in gear_slots %}
+        <option value="{{ s.key }}">{{ s.name }}</option>
+        {% endfor %}
+      </select>
+      <input type="text" name="rarity" placeholder="Rarity" style="max-width:5.5rem">
+      <input type="text" name="level" placeholder="Level" style="max-width:5.5rem">
+      <select name="main_stat_key">
+        <option value="">— main stat —</option>
+        {% for s in stat_options %}
+        <option value="{{ s.key }}">{{ s.name }}</option>
+        {% endfor %}
+      </select>
+      <input type="text" name="main_stat_value" placeholder="Main value" style="max-width:7rem">
+      <select name="equipped_character_id">
+        <option value="">— not equipped —</option>
+        {% for cid, cname in character_options %}
+        <option value="{{ cid }}">{{ cname }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Add</button>
+    </div>
+    <div class="grid2" style="margin-top:.7rem">
+      {% for index in range(1, 7) %}
+      <div class="inline-row" style="margin-top:0">
+        <select name="substat_key_{{ index }}">
+          <option value="">— substat {{ index }} —</option>
+          {% for s in stat_options %}
+          <option value="{{ s.key }}">{{ s.name }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="substat_value_{{ index }}" placeholder="Value" style="max-width:7rem">
+      </div>
       {% endfor %}
-    </select>
-    <select name="slot" required>
-      <option value="">— slot —</option>
-      {% for s in gear_slots %}
-      <option value="{{ s.key }}">{{ s.name }}</option>
-      {% endfor %}
-    </select>
-    <input type="text" name="rarity" placeholder="Rarity" style="max-width:5.5rem">
-    <input type="text" name="level" placeholder="Level" style="max-width:5.5rem">
-    <select name="main_stat_key">
-      <option value="">— main stat —</option>
-      {% for s in stat_options %}
-      <option value="{{ s.key }}">{{ s.name }}</option>
-      {% endfor %}
-    </select>
-    <input type="text" name="main_stat_value" placeholder="Value" style="max-width:6rem">
-    <select name="equipped_character_id">
-      <option value="">— not equipped —</option>
-      {% for cid, cname in character_options %}
-      <option value="{{ cid }}">{{ cname }}</option>
-      {% endfor %}
-    </select>
-    <button type="submit">Add</button>
+    </div>
   </form>
+</section>
+
+<section class="card" id="crit-check" style="margin-top:1rem">
+    <h2>Crit trade-off check</h2>
+    <p class="muted">Is 95% Crit Rate / 105% Crit DMG better than 65% / 155%?
+    Compare two builds for one {{ term.character|lower }}. When the game has a
+    published build guide, a stated Crit Rate floor is respected; otherwise the
+    higher expected crit multiplier wins.</p>
+    <form method="get" action="/ui/gear#crit-check">
+      <div class="inline-row">
+        <select name="crit_character">
+          <option value="">— character (optional) —</option>
+          {% for member in character_key_options %}
+          <option value="{{ member.key }}" {% if crit_inputs.character == member.key %}selected{% endif %}>{{ member.name }}</option>
+          {% endfor %}
+        </select>
+        <label>Build A <input type="text" name="cr_a" value="{{ crit_inputs.cr_a }}" placeholder="CR 95" style="max-width:6rem">%
+          <input type="text" name="cd_a" value="{{ crit_inputs.cd_a }}" placeholder="CD 105" style="max-width:6rem">%</label>
+        <label>Build B <input type="text" name="cr_b" value="{{ crit_inputs.cr_b }}" placeholder="CR 65" style="max-width:6rem">%
+          <input type="text" name="cd_b" value="{{ crit_inputs.cd_b }}" placeholder="CD 155" style="max-width:6rem">%</label>
+        <button type="submit">Compare</button>
+      </div>
+    </form>
+    {% if crit_result %}
+    <div class="card">
+      <h3>
+        {% if crit_result.winner == 'tie' %}Dead heat{% else %}Build {{ crit_result.winner }} wins{% endif %}
+      </h3>
+      <p>{{ crit_result.reason }}.</p>
+      <table class="mini">
+        <thead><tr><th>Build</th><th>CR</th><th>CD</th><th>Expected crit multiplier</th><th>Crit value</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td class="num-cell">{{ crit_result.a.crit_rate }}%</td><td class="num-cell">{{ crit_result.a.crit_dmg }}%</td><td class="num-cell">×{{ crit_result.a.expected_crit_multiplier }}</td><td class="num-cell">{{ crit_result.a.crit_value }}</td></tr>
+          <tr><td>B</td><td class="num-cell">{{ crit_result.b.crit_rate }}%</td><td class="num-cell">{{ crit_result.b.crit_dmg }}%</td><td class="num-cell">×{{ crit_result.b.expected_crit_multiplier }}</td><td class="num-cell">{{ crit_result.b.crit_value }}</td></tr>
+        </tbody>
+      </table>
+      <p class="muted small">B − A multiplier: {{ '%+.3f'|format(crit_result.multiplier_delta_percent_b_minus_a) }} percentage points.
+      {% if crit_result.floor %}Published Crit Rate floor: {{ crit_result.floor }}%.{% endif %}</p>
+      {% for note in crit_result.notes %}<p class="muted small">{{ note }}</p>{% endfor %}
+    </div>
+    {% elif crit_priority %}
+    <p class="muted small">This character's published priority: {{ crit_priority }}</p>
+    {% endif %}
 </section>
 {% endblock %}

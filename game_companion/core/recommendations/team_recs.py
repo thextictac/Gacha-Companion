@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from game_companion.core.games.base import GameAdapter
-from game_companion.core.teams.scoring import score_team_composition
+from game_companion.core.teams.scoring import rank_member_keys, score_team_composition
 from game_companion.db.models import Character
 from game_companion.db.repositories import (
     CharacterRepository,
@@ -58,14 +58,20 @@ def recommend_teams(
             "error": f"need at least {adapter.team_rules().min_size} owned {term.character_plural}",
             "candidates": [],
         }
-    keys = [c.key for c in owned]
     team_size = adapter.team_rules().max_size
     constraints = _encounter_constraints(session, adapter, game_id, encounter)
     preferences = _preferences(session, player_id, game_id)
 
-    candidates = sorted(combinations(sorted(keys), team_size))
-    if len(candidates) > 120:  # documented deterministic cap for big rosters
-        candidates = candidates[:120]
+    # Rank first, then enumerate a bounded candidate pool. This keeps strong
+    # characters in the pool even when the roster is long. 12 choose 3/4 is
+    # small enough for an interactive API call.
+    pool = rank_member_keys(
+        session, adapter, game_id, player_id,
+        keys=[c.key for c in owned], limit=min(len(owned), 12),
+    )
+    candidates = list(combinations(pool, team_size))
+    if len(candidates) > 600:  # documented deterministic cap for big rosters
+        candidates = candidates[:600]
 
     scored = [
         score_team_composition(
