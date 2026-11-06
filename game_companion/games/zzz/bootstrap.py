@@ -22,8 +22,9 @@ BOOTSTRAP_SOURCES: dict[str, dict[str, Any]] = {
 
 _ELEMENT_NAMES = {
     "physical": "Physical", "fire": "Fire", "ice": "Ice",
-    "electric": "Electric", "ether": "Ether",
+    "electric": "Electric", "ether": "Ether", "lumiflux": "Lumiflux",
     200: "Physical", 201: "Fire", 202: "Ice", 203: "Electric", 205: "Ether",
+    206: "Lumiflux",
 }
 
 

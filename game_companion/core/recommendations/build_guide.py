@@ -18,6 +18,70 @@ def _stat_names(adapter: GameAdapter) -> dict[str, str]:
     return {stat.key: stat.name for stat in adapter.stat_definitions()}
 
 
+def _normalise_token(text: str) -> str:
+    """Lower-case a published priority token and drop its condition clause.
+
+    Sources write priorities in prose ("CRIT RATE (until 75% in stat screen)",
+    "ATK% (until 4000 in statscreen)"), so the parenthetical never identifies
+    the stat.
+    """
+    token = str(text or "").strip().lower()
+    token = token.split("(", 1)[0]
+    return " ".join(token.replace("_", " ").split())
+
+
+def _stat_key_lookup(adapter: GameAdapter) -> dict[str, str]:
+    """Map normalised display spellings (and keys) to canonical stat keys.
+
+    Published build guides use display names ("ATK%", "Flat ATK", "PEN",
+    "CRIT RATE"), while stored gear uses stat keys ("atk_pct", "pen"). This
+    lookup is what makes the guide's priority list usable by scoring.
+    """
+    lookup: dict[str, str] = {}
+    for stat in adapter.stat_definitions():
+        lookup[_normalise_token(stat.key)] = stat.key
+        lookup[_normalise_token(stat.name)] = stat.key
+        if stat.short:
+            lookup[_normalise_token(stat.short)] = stat.key
+    # Explicit synonyms seen in source data that no definition spells directly.
+    lookup.update(
+        {
+            "atk%": "atk_pct",
+            "hp%": "hp_pct",
+            "def%": "def_pct",
+            "crit dmg%": "crit_dmg",
+            "flat atk": "atk",
+            "flat hp": "hp",
+            "flat def": "def",
+            "flat pen": "pen",
+            "pen": "pen",
+            "pen ratio": "pen_ratio",
+        }
+    )
+    return lookup
+
+
+def resolve_priority_keys(
+    adapter: GameAdapter, raw: str | None
+) -> list[str]:
+    """Resolve a published priority string to canonical, de-duplicated keys.
+
+    Order is preserved (``>`` and ``=`` both separate ranked tokens). Tokens
+    that match no stat are dropped rather than guessed.
+    """
+    lookup = _stat_key_lookup(adapter)
+    keys: list[str] = []
+    for group in _priority_tokens(str(raw or "")):
+        for token in group:
+            # "ATK/Flat ATK" (either form satisfies the tier) is written as
+            # one slash-joined token in the source data.
+            for part in token.split("/"):
+                key = lookup.get(_normalise_token(part))
+                if key and key not in keys:
+                    keys.append(key)
+    return keys
+
+
 def _slot_names(adapter: GameAdapter) -> dict[str, str]:
     return {slot.key: slot.name for slot in adapter.gear_slots()}
 
@@ -138,12 +202,7 @@ def build_guide(adapter: GameAdapter, character_key: str) -> dict[str, Any] | No
     variants.sort(key=lambda item: -(item["q"] or 0))
 
     raw_priority = str(row.get("substat_priority_raw") or "").strip()
-    priority_keys = [
-        key
-        for group in _priority_tokens(raw_priority)
-        for key in group
-        if key in stat_names
-    ]
+    priority_keys = resolve_priority_keys(adapter, raw_priority)
     priority = [{"key": key, "name": stat_names[key]} for key in priority_keys]
 
     return {
@@ -177,4 +236,4 @@ def build_guide(adapter: GameAdapter, character_key: str) -> dict[str, Any] | No
     }
 
 
-__all__ = ["build_guide"]
+__all__ = ["build_guide", "resolve_priority_keys"]

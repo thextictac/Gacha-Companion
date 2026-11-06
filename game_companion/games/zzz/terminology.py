@@ -32,6 +32,8 @@ ATTRIBUTE_NAMES = {
     # Seen in Prydwen build data (3.2) — UNKNOWN-NEEDS DATA in-game until
     # corroborated by a second source.
     "wind": "Wind",
+    # 3.x attribute introduced with Lumiflux agents.
+    "lumiflux": "Lumiflux",
 }
 
 SPECIALTY_NAMES = {

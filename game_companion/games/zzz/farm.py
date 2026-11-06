@@ -45,7 +45,8 @@ SCARCITY_BOOSTS = {
     "severe_v": 1.5,
 }
 _ELEMENTAL_MAINS = {
-    "physical_dmg", "fire_dmg", "ice_dmg", "electric_dmg", "ether_dmg", "wind_dmg",
+    "physical_dmg", "fire_dmg", "ice_dmg", "electric_dmg", "ether_dmg",
+    "wind_dmg", "lumiflux_dmg",
 }
 _SPECIAL_IV_VI_MAINS = {
     "crit_rate", "crit_dmg", "anomaly_proficiency", "anomaly_mastery", "energy_regen", "impact",

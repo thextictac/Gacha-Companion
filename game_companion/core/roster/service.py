@@ -87,15 +87,62 @@ class RosterService:
                 f"unknown skill key(s) {unknown} for game '{self.adapter.game_id}' "
                 f"(known: {known})"
             )
+        character_context = self._character_context(char)
         for skill_key, level in skills.items():
-            max_level = definitions[skill_key].max_level
+            definition = definitions[skill_key]
+            max_level = self.adapter.skill_max_level(definition, character_context)
             if level is not None and not (0 <= level <= max_level):
                 raise ValidationError(
                     f"skill '{skill_key}' level {level} outside 0..{max_level}"
-                    + (f" ({definitions[skill_key].max_level_note})" if definitions[skill_key].max_level_note else "")
+                    + (f" ({definition.max_level_note})" if definition.max_level_note else "")
                 )
             self.characters.set_skill(char.id, skill_key, level)
         return {k: v for k, v in skills.items()}
+
+    def set_skills_from_text(self, char: Character, raw_skills: Mapping[str, str]) -> dict:
+        """Parse the UI's skill inputs through the adapter (letters allowed)."""
+        definitions = {d.key: d for d in self.adapter.skill_definitions()}
+        parsed: dict[str, int | None] = {}
+        for key, raw in raw_skills.items():
+            definition = definitions.get(key)
+            if definition is None:
+                continue
+            try:
+                parsed[key] = self.adapter.parse_skill_level(definition, str(raw or ""))
+            except (TypeError, ValueError):
+                raise ValidationError(
+                    f"skill '{definition.name}' level '{raw}' is not understood"
+                ) from None
+        return self.set_skills(char, parsed) if parsed else {}
+
+    def _character_context(self, char: Character) -> dict[str, Any]:
+        return {
+            "key": char.key,
+            "duplication_level": char.duplication_level,
+            "data": char.data,
+        }
+
+    def skill_rows(self, char: Character) -> list[dict[str, Any]]:
+        """Skill display rows: stored level, display form, effective cap."""
+        context = self._character_context(char)
+        levels = {
+            row.skill_key: row.level
+            for row in (char.skills or [])
+            if getattr(row, "skill_key", None)
+        }
+        rows = []
+        for definition in self.adapter.skill_definitions():
+            level = levels.get(definition.key)
+            rows.append(
+                {
+                    "key": definition.key,
+                    "name": definition.name,
+                    "level": level,
+                    "display": self.adapter.format_skill_level(definition, level),
+                    "max_level": self.adapter.skill_max_level(definition, context),
+                }
+            )
+        return rows
 
     # -- builds ---------------------------------------------------------------
 

@@ -50,7 +50,7 @@
       <td>{{ c.rarity or '—' }}</td>
       <td class="num-cell">{{ c.level if c.level is not none else '—' }}</td>
       <td class="num-cell">{{ c.duplication_level if c.duplication_level is not none else '—' }}</td>
-      <td class="muted">{{ c.skills.values()|list|join(', ') if c.skills else '—' }}</td>
+      <td class="muted">{{ c.skill_display|join(' · ') if c.skill_display else '—' }}</td>
       <td>{% if c.favorite %}★{% else %}·{% endif %}</td>
       <td>{% if c.owned %}yes{% else %}no{% endif %}</td>
       <td class="muted">{{ (c.notes or '')|truncate(40) }}</td>

@@ -120,6 +120,63 @@ class ZZZAdapter(GameAdapter):
     def skill_definitions(self) -> list[SkillDefinition]:
         return list(SKILL_DEFINITIONS)
 
+    # -- per-character progression (Mindscape / Potential Vision) -------------
+
+    _CORE_SKILL_KEY = "core_skill"
+    _MINDSCAPE_COMBAT_BONUS = {3: 2, 5: 2}  # M3 and M5 each raise combat skills +2
+    _CORE_SKILL_LETTERS = "ABCDEF"
+
+    def skill_max_level(
+        self,
+        definition: SkillDefinition,
+        character: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Combat skills cap at 12, raised to 16 by Mindscape M3 + M5.
+
+        Core Skill keeps its own cap (letters A–F, i.e. six tiers) and is not
+        touched by Mindscape.
+        """
+        base = definition.max_level
+        if definition.key == self._CORE_SKILL_KEY or not character:
+            return base
+        duplication = character.get("duplication_level")
+        if duplication is None:
+            return base
+        try:
+            level = int(duplication)
+        except (TypeError, ValueError):
+            return base
+        bonus = sum(add for rank, add in self._MINDSCAPE_COMBAT_BONUS.items() if level >= rank)
+        return base + bonus
+
+    def format_skill_level(self, definition: SkillDefinition, level: int | None) -> str:
+        if definition.key != self._CORE_SKILL_KEY or level is None:
+            return "" if level is None else str(level)
+        # Stored 1..6 → A..F. Values outside the band fall back to the number
+        # rather than inventing a letter.
+        if 1 <= int(level) <= len(self._CORE_SKILL_LETTERS):
+            return self._CORE_SKILL_LETTERS[int(level) - 1]
+        return str(level)
+
+    def parse_skill_level(self, definition: SkillDefinition, raw: str) -> int | None:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        if definition.key == self._CORE_SKILL_KEY and text.upper() in self._CORE_SKILL_LETTERS:
+            return self._CORE_SKILL_LETTERS.index(text.upper()) + 1
+        return int(text)
+
+    def character_progression_fields(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "key": "potential_vision",
+                "label": "Potential Vision",
+                "kind": "int",
+                "max_level": 6,
+                "help": "1–6; only some Agents support this and it tweaks their kit.",
+            },
+        ]
+
     def resource_definitions(self) -> list[resource_rules.ResourceDefinition]:
         return resource_rules.resource_definitions(self._requirements)
 
@@ -128,6 +185,48 @@ class ZZZAdapter(GameAdapter):
 
     def gear_sets(self) -> list[dict[str, Any]]:
         return [dict(s) for s in self._sets]
+
+    # -- gear rules (slots, main stats, grading, shorthand) -------------------
+
+    def substat_stat_keys(self) -> list[str] | None:
+        # PEN (flat) is the substat; Pen Ratio is a slot-5 main and must not
+        # be offered as a substat choice.
+        return [key for key in (stat.key for stat in STAT_DEFINITIONS) if key != "pen_ratio"]
+
+    def fixed_main_stat(self, slot: str | None) -> str | None:
+        return gear_rules.FIXED_SLOT_MAINS.get(str(slot)) if slot is not None else None
+
+    def auto_main_stat_value(self, main_key: str | None, level: int | None) -> float | None:
+        return gear_rules.main_stat_value(main_key, level)
+
+    def main_stat_max_values(self) -> dict[str, float]:
+        return dict(gear_rules.MAIN_STAT_VALUE_AT_15)
+
+    def disc_grade(
+        self,
+        gear: Mapping[str, Any],
+        priority_keys: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        result = gear_rules.priority_grade(gear, priority_keys)
+        # The generalized (no-priority) grade also weighs the disc set's
+        # intended purpose from its 2-piece bonus, so an on-set-purpose piece
+        # ranks above an off-purpose one with the same rolls.
+        set_key = gear.get("set_key")
+        if not priority_keys and set_key:
+            bonus = self._set_piece_two(str(set_key))
+            if bonus:
+                graded = gear_rules.disc_grade(gear, set_bonus_two=bonus)
+                result = {**result, **graded}
+        return result
+
+    def _set_piece_two(self, set_key: str) -> str | None:
+        for row in self._sets:
+            if row.get("key") == set_key:
+                return row.get("piece_2")
+        return None
+
+    def substat_code(self, substats: Sequence[Mapping[str, Any]] | None) -> str:
+        return gear_rules.substat_code(list(substats or []))
 
     def farm_stages(self) -> list[dict[str, Any]]:
         from game_companion.games.zzz import farm as zzz_farm
@@ -294,7 +393,9 @@ class ZZZAdapter(GameAdapter):
 
     # -- validation / lookup -----------------------------------------------------
 
-    _ALLOWED_DATA_KEYS = {"attribute", "specialty", "faction", "nickname"}
+    _ALLOWED_DATA_KEYS = {
+        "attribute", "specialty", "faction", "nickname", "potential_vision",
+    }
 
     def validate_character_data(self, data: Mapping[str, Any]) -> dict[str, Any]:
         cleaned: dict[str, Any] = {}
@@ -312,6 +413,16 @@ class ZZZAdapter(GameAdapter):
                 raise ValidationError(
                     f"unknown specialty '{value}' (allowed: {sorted(SPECIALTY_NAMES)})"
                 )
+            if key == "potential_vision" and value not in (None, ""):
+                try:
+                    level = int(value)
+                except (TypeError, ValueError):
+                    raise ValidationError(
+                        f"potential_vision must be a number 1–6 (got '{value}')"
+                    ) from None
+                if not (1 <= level <= 6):
+                    raise ValidationError(f"potential_vision {level} outside 1..6")
+                value = str(level)
             cleaned[key] = value
         return cleaned
 

@@ -341,6 +341,25 @@ body[data-game="hsr"] header nav a.active { box-shadow: 0 2px 0 var(--accent2); 
   animation: toastIn .5s cubic-bezier(.2, 1.4, .4, 1) both; }
 @keyframes toastIn { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }
 
+/* ---- inventory: collapsible add panels + scrollable lists ---- */
+details.add-panel {
+  border: 1px solid var(--line); border-radius: var(--radius, 10px);
+  padding: 0 1rem; margin-bottom: 1rem;
+  background: color-mix(in srgb, var(--bg2, #14161f) 65%, transparent);
+}
+details.add-panel > summary {
+  cursor: pointer; padding: 0.7rem 0; font-weight: 700;
+  color: var(--accent2, var(--accent)); list-style: none;
+}
+details.add-panel > summary::-webkit-details-marker { display: none; }
+details.add-panel > summary::before { content: "＋ "; }
+details.add-panel[open] > summary::before { content: "− "; }
+details.add-panel[open] { padding-bottom: 1rem; }
+/* Long inventories stay compact: a fixed viewport-height scroller keeps the
+   page from growing with every disc/weapon added. */
+.scroll-list { max-height: 32rem; overflow-y: auto; overscroll-behavior: contain; }
+.scroll-list thead th { position: sticky; top: 0; background: var(--card, var(--bg2)); z-index: 1; }
+
 /* ---- game fonts + shape language (v5) ---- */
 @font-face { font-family: 'Saira Condensed'; src: url('/ui/static/fonts/SairaCondensed-600.woff2') format('woff2'); font-weight: 600; font-display: swap; }
 @font-face { font-family: 'Saira Condensed'; src: url('/ui/static/fonts/SairaCondensed-700.woff2') format('woff2'); font-weight: 700; font-display: swap; }

@@ -351,6 +351,82 @@ class GameAdapter(ABC):
     def resolve_character_key(self, name: str) -> str | None:  # noqa: B027 - optional hook
         """Resolve a user-supplied character name to the adapter's canonical key."""
 
+    def skill_max_level(
+        self,
+        definition: SkillDefinition,
+        character: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Effective skill cap for one character (default: definition cap).
+
+        Games with per-character progression bonuses (duplication ranks that
+        raise a skill's cap) override this. ``character`` is the stored record
+        (``duplication_level`` etc.) or None when unknown.
+        """
+        return definition.max_level
+
+    def format_skill_level(self, definition: SkillDefinition, level: int | None) -> str:
+        """Display form of a stored skill level (default: the number).
+
+        Games that label a skill with letters (ZZZ Core Skill A–F) override
+        this; storage always stays numeric.
+        """
+        return "" if level is None else str(level)
+
+    def parse_skill_level(self, definition: SkillDefinition, raw: str) -> int | None:
+        """Parse a user-entered skill level (default: integer).
+
+        Override to accept the game's display form as well (e.g. ``F`` for the
+        top Core Skill tier) while still returning the stored numeric level.
+        """
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        return int(text)
+
+    def character_progression_fields(self) -> list[dict[str, Any]]:
+        """Extra per-character progression fields the UI should track.
+
+        Each entry: ``{key, label, kind, max_level?, help?}`` where ``kind`` is
+        ``int`` (or ``text``). Values live in ``characters.data`` alongside the
+        other game-specific extras; adapters validate them.
+        """
+        return []
+
+    # --- gear-specific hooks -------------------------------------------------
+
+    def substat_stat_keys(self) -> list[str] | None:
+        """Stat keys that can appear as gear substats, or None for "all"."""
+        return None
+
+    def fixed_main_stat(self, slot: str | None) -> str | None:
+        """Main stat a slot always rolls, or None when the slot has choices."""
+        return None
+
+    def auto_main_stat_value(self, main_key: str | None, level: int | None) -> float | None:
+        """Suggested main-stat value for a key at a level, or None if unknown."""
+        return None
+
+    def main_stat_max_values(self) -> dict[str, float]:
+        """Known main-stat values at the gear level cap, for client-side hints."""
+        return {}
+
+    def disc_grade(
+        self,
+        gear: Mapping[str, Any],
+        priority_keys: Sequence[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """Letter grade for one gear piece ({grade, rolls, ...}), or None.
+
+        ``priority_keys`` (when given) makes the grade build-aware: only
+        substats that matter to that build count, plus a matching main stat.
+        Adapters whose games have no grade vocabulary return None.
+        """
+        return None
+
+    def substat_code(self, substats: Sequence[Mapping[str, Any]] | None) -> str:
+        """Compact sorting code for a piece's substats (default: empty)."""
+        return ""
+
     # --- scoring hooks (all explainable, labeled) ----------------------------
 
     def score_gear(

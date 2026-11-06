@@ -54,8 +54,11 @@ CODES_SOURCE: dict[str, Any] = {
 # Prydwen rank letters -> the integer rarity scale used across the app.
 _RANKS = {"S": 5, "A": 4, "B": 3}
 
-_ZZZ_ELEMENTS = ("Physical", "Fire", "Ice", "Electric", "Ether")
-_ZZZ_STYLES = ("Attack", "Stun", "Anomaly", "Support", "Defense", "Defence", "Rupture")
+_ZZZ_ELEMENTS = ("Physical", "Fire", "Ice", "Electric", "Ether", "Lumiflux")
+_ZZZ_STYLES = (
+    "Attack", "Stun", "Anomaly", "Support", "Defense", "Defence",
+    "Rupture", "Armorer",
+)
 
 # <a href="/zenless/characters/SLUG"><div class="avatar pw-card zzz rarity-S true">
 # <img alt="Name" ...>...<span class="emp-name">Name</span>...element/style icons

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from game_companion.core.games.base import (
@@ -35,6 +35,7 @@ GEAR_SLOTS = [
         main_stat_pool=(
             "hp_pct", "atk_pct", "def_pct", "pen_ratio",
             "physical_dmg", "fire_dmg", "ice_dmg", "electric_dmg", "ether_dmg", "wind_dmg",
+            "lumiflux_dmg",
         ),
     ),
     GearSlotDefinition(
@@ -46,6 +47,241 @@ GEAR_SLOTS = [
     ),
 ]
 
+# Slots 1-3 never roll a different main stat: the main is fixed by the slot.
+FIXED_SLOT_MAINS = {"1": "hp", "2": "atk", "3": "def"}
+
+# Main-stat values at +15 (max S-rank). Slots 1-3 are player-confirmed; the
+# slot 4/5/6 values are the standard in-game maxes (HEURISTIC for now — edit
+# this table if a value is wrong, it drives the auto-fill only).
+MAIN_STAT_VALUE_AT_15: dict[str, float] = {
+    "hp": 2200.0,  # confirmed
+    "atk": 316.0,  # confirmed
+    "def": 184.0,  # confirmed
+    "hp_pct": 0.30,
+    "atk_pct": 0.30,
+    "def_pct": 0.48,
+    "crit_rate": 0.24,
+    "crit_dmg": 0.48,
+    "anomaly_proficiency": 92.0,
+    "anomaly_mastery": 0.30,
+    "pen_ratio": 0.24,
+    "energy_regen": 0.60,
+    "impact": 0.18,
+    "physical_dmg": 0.30,
+    "fire_dmg": 0.30,
+    "ice_dmg": 0.30,
+    "electric_dmg": 0.30,
+    "ether_dmg": 0.30,
+    "wind_dmg": 0.30,
+    "lumiflux_dmg": 0.30,
+}
+_CONFIRMED_MAIN_KEYS = frozenset({"hp", "atk", "def"})
+
+
+def main_stat_value(main_key: str | None, level: int | None) -> float | None:
+    """Auto-fill a main-stat value for a key at a level.
+
+    Only the +15 values are known; other levels scale linearly from 0 (a
+    HEURISTIC, so the UI shows it as a suggestion the player can overwrite).
+    """
+    if not main_key or main_key not in MAIN_STAT_VALUE_AT_15:
+        return None
+    at_15 = MAIN_STAT_VALUE_AT_15[main_key]
+    if level is None:
+        return at_15
+    if level <= 0:
+        return 0.0
+    return round(at_15 * min(level, 15) / 15, 4)
+
+
+def main_stat_value_verified(main_key: str | None, level: int | None) -> bool:
+    """True only for the player-confirmed +15 slots 1-3 values."""
+    return level == 15 and main_key in _CONFIRMED_MAIN_KEYS
+
+
+# -- substat shorthand codes -------------------------------------------------
+# Canonical order (fixed so a code is always readable the same way). Percent
+# stats come first, then flat/utility: CR CD AK HP DF PEN AP AM IM ER AN HN DN.
+# * AK/HP/DF are the % versions; P#/AN/HN/DN are the flat ones.
+SUBSTAT_CODE_ORDER: tuple[tuple[str, str], ...] = (
+    ("crit_rate", "CR"),
+    ("crit_dmg", "CD"),
+    ("atk_pct", "AK"),
+    ("hp_pct", "HP"),
+    ("def_pct", "DF"),
+    ("pen", "PEN"),
+    ("anomaly_proficiency", "AP"),
+    ("anomaly_mastery", "AM"),
+    ("impact", "IM"),
+    ("energy_regen", "ER"),
+    ("atk", "AN"),
+    ("hp", "HN"),
+    ("def", "DN"),
+)
+CODE_TO_STAT = {code: key for key, code in SUBSTAT_CODE_ORDER}
+
+
+def substat_code(substats: Sequence[Mapping[str, Any]] | None) -> str:
+    """Short sorting code, e.g. ``CR2CD1``.
+
+    One entry per substat that is present on the disc, in canonical order, with
+    its roll count (defaults to 1 when the roll count was not recorded). Stats
+    that are not present are omitted, keeping codes short and scannable.
+    """
+    counts = substat_rolls(substats)
+    parts = [f"{code}{counts[key]}" for key, code in SUBSTAT_CODE_ORDER if key in counts]
+    return "".join(parts)
+
+
+def substat_rolls(substats: Sequence[Mapping[str, Any]] | None) -> dict[str, int]:
+    """Roll count per substat key, in the disc's own order."""
+    counts: dict[str, int] = {}
+    for sub in substats or []:
+        if not isinstance(sub, Mapping):
+            continue
+        key = str(sub.get("key") or "")
+        if not key:
+            continue
+        rolls = sub.get("rolls")
+        count = 1 if rolls is None else max(1, int(rolls))
+        counts[key] = counts.get(key, 0) + count
+    return counts
+
+
+def total_rolls(substats: Sequence[Mapping[str, Any]] | None) -> int:
+    return sum(substat_rolls(substats).values())
+
+
+DISC_GRADES = ("ZERO", "GOD", "ZZZ", "S", "A", "B", "C", "D", "F")
+# Best-to-worst, i.e. how many matching rolls earn each grade. F=0 and each
+# further roll moves one step up: D=1, C=2, B=3, A=4, S=5, ZZZ=6, GOD=7,
+# ZERO=8+. (``DISC_GRADES`` stays best-first so it also drives sort order.)
+GRADE_BY_ROLLS = ("F", "D", "C", "B", "A", "S", "ZZZ", "GOD", "ZERO")
+
+
+def _grade_for_rolls(rolls: int) -> str:
+    return GRADE_BY_ROLLS[min(max(rolls, 0), len(GRADE_BY_ROLLS) - 1)]
+
+
+# Requirement: the generalized grade should value each drive set for its
+# intended purpose. A 2-piece bonus (e.g. "CRIT Rate +8%", "DEF +16%",
+# "Energy Regen +20%") tells us what that set is for; rolls that overlap the
+# purpose count in full, unrelated rolls count half. This keeps quantity as the
+# base signal while nudging purpose-fit discs up (and off-purpose ones down).
+SET_PURPOSE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("crit", ("crit rate", "crit dmg")),
+    ("anomaly", ("anomaly proficiency", "anomaly mastery")),
+    ("physical", ("physical dmg",)),
+    ("fire", ("fire dmg",)),
+    ("ice", ("ice dmg",)),
+    ("electric", ("electric dmg",)),
+    ("ether", ("ether dmg",)),
+    ("wind", ("wind dmg",)),
+    ("lumiflux", ("lumiflux dmg",)),
+    ("impact", ("daze", "impact")),
+    ("energy", ("energy regen",)),
+    ("pen", ("pen ratio", "pen ")),
+    ("defense", ("def ", "def+", "shield")),
+    ("hp", ("hp ", "hp+")),
+    ("atk", ("atk ", "atk+", "basic attack dmg", "dash attack", "aftershock")),
+)
+
+_PURPOSE_WEIGHTS: dict[str, dict[str, float]] = {
+    "crit": {"crit_rate": 1.0, "crit_dmg": 1.0, "atk_pct": 0.7},
+    "anomaly": {"anomaly_proficiency": 1.0, "anomaly_mastery": 1.0, "atk_pct": 0.7},
+    "impact": {"impact": 1.0, "energy_regen": 0.8, "crit_rate": 0.5},
+    "energy": {"energy_regen": 1.0, "anomaly_proficiency": 0.6, "hp_pct": 0.5},
+    "pen": {"pen": 1.0, "pen_ratio": 1.0, "atk_pct": 0.6},
+    "defense": {"def_pct": 1.0, "def": 1.0, "hp_pct": 0.7},
+    "hp": {"hp_pct": 1.0, "hp": 1.0, "def_pct": 0.6},
+    "atk": {"atk_pct": 1.0, "atk": 1.0, "crit_rate": 0.8, "crit_dmg": 0.8},
+}
+for _element in ("physical", "fire", "ice", "electric", "ether", "wind", "lumiflux"):
+    _PURPOSE_WEIGHTS[_element] = {
+        f"{_element}_dmg": 1.0, "atk_pct": 0.6, "pen_ratio": 0.5,
+    }
+# Off-purpose rolls still count, just at a discount.
+_OFF_PURPOSE_WEIGHT = 0.5
+
+
+def set_purpose(piece_two: str | None) -> str | None:
+    """Classify a drive set from its 2-piece bonus text (None when unknown)."""
+    text = (piece_two or "").strip().lower()
+    if not text:
+        return None
+    for purpose, keywords in SET_PURPOSE_KEYWORDS:
+        if any(keyword in text for keyword in keywords):
+            return purpose
+    return None
+
+
+def purpose_substat_weight(purpose: str | None, stat_key: str) -> float:
+    """Multiplier for one substat's rolls given the set's intended purpose."""
+    if not purpose:
+        return 1.0
+    weights = _PURPOSE_WEIGHTS.get(purpose)
+    if not weights:
+        return 1.0
+    return weights.get(stat_key, _OFF_PURPOSE_WEIGHT)
+
+
+def disc_grade(
+    gear: Mapping[str, Any],
+    *,
+    set_bonus_two: str | None = None,
+) -> dict[str, Any]:
+    """Grade a disc by how many substat rolls it landed.
+
+    F=0, D=1, C=2, B=3, A=4, S=5, ZZZ=6, GOD=7, ZERO=8+. Uses recorded roll
+    counts (each substat defaults to 1 roll when not recorded), so a disc with
+    four substats and no upgrade rolls is ``A``.
+
+    When the set's 2-piece bonus is supplied, rolls are weighted by how well
+    they match the set's purpose (e.g. CRIT on an Attack set, DEF on a
+    Defensive set), so an on-purpose disc grades higher than a mismatched one
+    with the same roll count.
+    """
+    counts = substat_rolls(gear.get("substats"))
+    purpose = set_purpose(set_bonus_two)
+    if not purpose:
+        rolls = sum(counts.values())
+        return {"grade": _grade_for_rolls(rolls), "rolls": rolls}
+    weighted = sum(
+        count * purpose_substat_weight(purpose, key) for key, count in counts.items()
+    )
+    rolls = int(round(weighted))
+    return {"grade": _grade_for_rolls(rolls), "rolls": rolls, "set_purpose": purpose}
+
+
+def priority_grade(
+    gear: Mapping[str, Any],
+    priority_keys: Sequence[str] | None,
+) -> dict[str, Any]:
+    """Build-aware grade: only substats the build wants count, plus the main.
+
+    Requirement: the same disc can be ZERO for one agent and F for another.
+    Rolls on substats outside the priority list do not count; a main stat the
+    build wants adds one effective roll. With no priority list this degrades to
+    the generalized :func:`disc_grade`.
+    """
+    if not priority_keys:
+        return disc_grade(gear)
+    wanted = {str(key) for key in priority_keys if key}
+    counts = substat_rolls(gear.get("substats"))
+    matching = {key: count for key, count in counts.items() if key in wanted}
+    rolls = sum(matching.values())
+    main_key = gear.get("main_stat_key")
+    main_matches = bool(main_key and main_key in wanted)
+    if main_matches:
+        rolls += 1
+    return {
+        "grade": _grade_for_rolls(rolls),
+        "rolls": rolls,
+        "matching_substats": matching,
+        "main_matches": main_matches,
+    }
+
+
 # Approximate reference maxima used ONLY to normalize the heuristic score.
 # These are not verified game constants; they just scale substat contributions.
 SUBSTAT_REFERENCE_MAX: dict[str, float] = {
@@ -54,6 +290,7 @@ SUBSTAT_REFERENCE_MAX: dict[str, float] = {
     "atk_pct": 0.30,
     "hp_pct": 0.30,
     "def_pct": 0.48,
+    "pen": 9.0,  # flat PEN substat roll value
     "pen_ratio": 0.24,
     "energy_regen": 0.60,
     "anomaly_proficiency": 12.0,
@@ -64,14 +301,27 @@ SUBSTAT_REFERENCE_MAX: dict[str, float] = {
     "impact": 0.18,
 }
 
+# Elemental DMG mains (slot V). They share one usefulness band per archetype;
+# listing them keeps a correct element from being scored as "not valued".
+_ELEMENTAL_DMG_KEYS = (
+    "physical_dmg", "fire_dmg", "ice_dmg", "electric_dmg", "ether_dmg",
+    "wind_dmg", "lumiflux_dmg",
+)
+
 ARCHETYPE_WEIGHTS: dict[str, dict[str, float]] = {
-    "attack": {"crit_rate": 0.28, "crit_dmg": 0.28, "atk_pct": 0.22, "pen_ratio": 0.12, "atk": 0.10},
+    "attack": {
+        "crit_rate": 0.28, "crit_dmg": 0.28, "atk_pct": 0.22,
+        "pen_ratio": 0.12, "pen": 0.10, "atk": 0.10,
+        **{key: 0.18 for key in _ELEMENTAL_DMG_KEYS},
+    },
     "anomaly": {
         "anomaly_proficiency": 0.35,
         "anomaly_mastery": 0.20,
         "atk_pct": 0.20,
         "pen_ratio": 0.10,
+        "pen": 0.08,
         "energy_regen": 0.15,
+        **{key: 0.15 for key in _ELEMENTAL_DMG_KEYS},
     },
     "stun": {"impact": 0.40, "energy_regen": 0.20, "crit_rate": 0.15, "def_pct": 0.15, "hp_pct": 0.10},
     "support": {

@@ -58,17 +58,20 @@
 
   <section class="card">
     <h2>Substats</h2>
-    <p class="muted">Percent stats accept 24 or 24%; flat stats accept the raw number.</p>
+    <p class="muted">Percent stats accept 24 or 24%; flat stats accept the raw number.
+    <strong>Rolls</strong> is how many times that substat was enhanced — the first
+    appearance is 1, each “+” is one more.</p>
     <div class="grid2">
       {% for row in substat_rows %}
       <div class="inline-row">
         <select name="substat_key_{{ loop.index }}">
           <option value="">— substat {{ loop.index }} —</option>
-          {% for stat in stat_options %}
+          {% for stat in substat_options %}
           <option value="{{ stat.key }}" {% if row.key == stat.key %}selected{% endif %}>{{ stat.name }}</option>
           {% endfor %}
         </select>
         <input type="text" name="substat_value_{{ loop.index }}" value="{{ row.value }}" placeholder="Value" style="max-width:7rem">
+        <input type="text" name="substat_rolls_{{ loop.index }}" value="{{ row.rolls }}" placeholder="Rolls" style="max-width:5rem">
       </div>
       {% endfor %}
     </div>

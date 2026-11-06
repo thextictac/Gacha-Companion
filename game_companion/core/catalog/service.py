@@ -9,6 +9,7 @@ why a source is unavailable. A failing source never blocks the others.
 
 from __future__ import annotations
 
+import html
 from datetime import UTC, datetime
 from typing import Any
 
@@ -75,16 +76,29 @@ class CatalogService:
         if entity_type:
             stmt = stmt.where(CatalogEntry.entity_type == entity_type)
         stmt = stmt.order_by(CatalogEntry.display_name)
-        return list(self.session.scalars(stmt))
+        return [self._repair_name(entry) for entry in self.session.scalars(stmt)]
 
     def find(self, entity_type: str, key: str) -> CatalogEntry | None:
-        return self.session.scalars(
+        entry = self.session.scalars(
             select(CatalogEntry).where(
                 CatalogEntry.game_id == self.adapter.game_id,
                 CatalogEntry.entity_type == entity_type,
                 CatalogEntry.key == key,
             )
         ).first()
+        return self._repair_name(entry) if entry is not None else None
+
+    @staticmethod
+    def _repair_name(entry: CatalogEntry) -> CatalogEntry:
+        """Fix rows imported before names were unescaped ("&amp;" → "&").
+
+        Idempotent, so it is safe on every read; the change persists on the
+        caller's next commit rather than needing a re-import.
+        """
+        fixed = html.unescape(entry.display_name or "").strip()
+        if fixed and fixed != entry.display_name:
+            entry.display_name = fixed
+        return entry
 
     def counts(self) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -180,7 +194,9 @@ class CatalogService:
         added = updated = 0
         for row in rows:
             key = str(row.get("key") or "").strip()
-            name = str(row.get("name") or "").strip()
+            # Scraped names arrive HTML-escaped ("Orphie &amp; Magus"), so
+            # unescape once here: every display path reads CatalogEntry.
+            name = html.unescape(str(row.get("name") or "").strip())
             if not key or not name:
                 continue
             entry = self.find(entity_type, key)

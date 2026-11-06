@@ -46,16 +46,23 @@ fix anything, and save. Saving marks the data as verified by you.</p>
         </select></label></p>
       {% endif %}
       <p><label>Faction<br><input type="text" name="faction" value="{{ selected.data.get('faction', '') }}"></label></p>
+      {% for field in progression_fields %}
+      <p><label>{{ field.label }}{% if field.max_level %} <span class="muted">(1–{{ field.max_level }})</span>{% endif %}<br>
+        <input type="text" name="{{ field.key }}" value="{{ selected.data.get(field.key, '') }}" style="max-width:6rem">
+      </label>{% if field.help %}<br><span class="muted small">{{ field.help }}</span>{% endif %}</p>
+      {% endfor %}
     </div>
     {% if selected.data %}<p class="muted">Other stored details: {{ selected.data|tojson }}</p>{% endif %}
   </section>
 
   <section class="card">
     <h2>Skill levels</h2>
+    <p class="muted small">Caps shown are effective for this Agent — {{ dupe_term }} bonuses included.
+    Core Skill accepts a letter (A–F) or its number.</p>
     <div class="grid2">
-      {% for key, name in skill_defs.items() %}
-      <p><label>{{ name }}<br>
-        <input type="text" name="skill_{{ key }}" value="{{ selected.skills.get(key, '') if key in selected.skills else '' }}" style="max-width:6rem">
+      {% for row in skill_rows %}
+      <p><label>{{ row.name }} <span class="muted">(max {{ row.max_level }})</span><br>
+        <input type="text" name="skill_{{ row.key }}" value="{{ row.display }}" style="max-width:6rem">
       </label></p>
       {% endfor %}
     </div>

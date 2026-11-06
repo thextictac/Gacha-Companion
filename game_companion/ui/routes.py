@@ -44,6 +44,10 @@ from game_companion.db.repositories import (
 from game_companion.ui import state as ui_state
 from game_companion.utils import to_iso
 
+# Grade bands, best-first, as presented in the UI. Adapters return one of these
+# names (or nothing); sorting uses this order so ZERO/GOD land at the top.
+GRADE_ORDER = ("ZERO", "GOD", "ZZZ", "S", "A", "B", "C", "D", "F")
+
 router = APIRouter(prefix="/ui", include_in_schema=False)
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -109,7 +113,7 @@ def _rarity_value(raw: str) -> int | str | None:
 
 
 def _substats_from_form(adapter, form) -> list[dict]:
-    """Read substat_key_N / substat_value_N rows from a browser form."""
+    """Read substat_key_N / substat_value_N / substat_rolls_N rows from a form."""
     out: list[dict] = []
     for index in range(1, 7):
         key = str(form.get(f"substat_key_{index}") or "").strip()
@@ -122,8 +126,25 @@ def _substats_from_form(adapter, form) -> list[dict]:
             continue
         if value is None:
             continue
-        out.append({"key": key, "value": value})
+        entry: dict = {"key": key, "value": value}
+        raw_rolls = str(form.get(f"substat_rolls_{index}") or "").strip()
+        if raw_rolls:
+            try:
+                entry["rolls"] = max(1, int(raw_rolls))
+            except ValueError:
+                pass
+        out.append(entry)
     return out
+
+
+def _substat_options(adapter) -> list[dict]:
+    """Substat choices are narrower than main-stat choices (no Pen Ratio)."""
+    allowed = adapter.substat_stat_keys()
+    stats = adapter.stat_definitions()
+    if allowed is not None:
+        allowed_set = set(allowed)
+        stats = [stat for stat in stats if stat.key in allowed_set]
+    return [{"key": stat.key, "name": stat.short or stat.name, "kind": stat.kind} for stat in stats]
 
 
 def _substat_display(adapter, gear) -> list[dict]:
@@ -175,10 +196,25 @@ def _loadout_context(session: Session, adapter, char, service: RosterService) ->
         for c in CharacterRepository(session).search(char.game_id, char.player_profile_id)
     }
     slot_map = {row.slot: row.gear_item_id for row in (active.gear_slots if active else [])}
+    # Grade options against THIS character's published priority, so the same
+    # disc can rank differently for an Attack agent and a Support agent.
+    guide = build_guide_for(adapter, char.key) or {}
+    priority_keys = [row["key"] for row in (guide.get("substat_priority") or [])] or None
     by_slot: dict[str, list[dict]] = {slot.key: [] for slot in adapter.gear_slots()}
     for item in gear:
         if item.slot not in by_slot:
             by_slot[item.slot] = []
+        try:
+            grade = adapter.disc_grade(
+                {"slot": item.slot, "main_stat_key": item.main_stat_key,
+                 "substats": item.substats or [], "set_key": item.set_key},
+                priority_keys,
+            )
+        except NotImplementedError:
+            grade = None
+        code = adapter.substat_code(item.substats or [])
+        grade_name = (grade or {}).get("grade")
+        extras = " · ".join(part for part in (code, grade_name) if part)
         by_slot[item.slot].append(
             {
                 "id": item.id,
@@ -186,13 +222,22 @@ def _loadout_context(session: Session, adapter, char, service: RosterService) ->
                     f"{item.set_key or 'no set'} · slot {item.slot} · "
                     f"{_format_stat_value(adapter, item.main_stat_key, item.main_stat_value)}"
                     f" · lv {item.level if item.level is not None else '?'}"
-                    f" · {chars.get(item.equipped_character_id, 'free') if item.equipped_character_id else 'free'}"
+                    + (f" · {extras}" if extras else "")
+                    + f" · {chars.get(item.equipped_character_id, 'free') if item.equipped_character_id else 'free'}"
                 ),
+                "grade": grade_name,
                 "current": slot_map.get(item.slot) == item.id,
             }
         )
+    grade_rank = {name: index for index, name in enumerate(GRADE_ORDER)}
     for options in by_slot.values():
-        options.sort(key=lambda row: (not row["current"], row["label"].lower()))
+        options.sort(
+            key=lambda row: (
+                not row["current"],
+                grade_rank.get(row["grade"], len(grade_rank)),
+                row["label"].lower(),
+            )
+        )
     equipment_options = [
         {
             "id": item.id,
@@ -493,13 +538,23 @@ def roster(request: Request, session: Session = Depends(get_db)):
 
     catalog = CatalogService(session, adapter).entries("character")
     owned = {c.key for c in chars}
+    service = RosterService(session, adapter)
+    rows = []
+    for c in chars:
+        record = character_dict(c)
+        record["skill_display"] = [
+            f"{row['name']} {row['display']}/{row['max_level']}"
+            for row in service.skill_rows(c)
+            if row["display"] not in ("", None)
+        ]
+        rows.append(record)
     return _ctx(
         request,
         session,
         adapter.terminology().character_plural,
         "roster",
         template="roster.html",
-        characters=[character_dict(c) for c in chars],
+        characters=rows,
         catalog=[
             {
                 "key": e.key,
@@ -728,6 +783,10 @@ def gear(
     cr_b: str = "",
     cd_b: str = "",
     crit_character: str = "",
+    grade_character: str = "",
+    sort: str = "",
+    direction: str = "",
+    need: str = "",
     session: Session = Depends(get_db),
 ):
     settings = request.app.state.settings
@@ -759,8 +818,25 @@ def gear(
     for e in catalog_service.entries("gear_set"):
         set_choices.setdefault(e.key, e.display_name)
     rolls = []
+    priority_keys = None
+    if grade_character:
+        guide = build_guide_for(adapter, grade_character) or {}
+        priority_keys = [row["key"] for row in (guide.get("substat_priority") or [])] or None
     for g in gear_rows:
         evaluation = _gear_evaluation(adapter, g, owned_specialties)
+        try:
+            grade = adapter.disc_grade(
+                {
+                    "slot": g.slot,
+                    "main_stat_key": g.main_stat_key,
+                    "substats": g.substats or [],
+                    "set_key": g.set_key,
+                },
+                priority_keys,
+            )
+        except NotImplementedError:
+            grade = None
+        code = adapter.substat_code(g.substats or [])
         rolls.append(
             {
                 "id": g.id,
@@ -769,7 +845,11 @@ def gear(
                 "rarity": g.rarity,
                 "level": g.level,
                 "main": _format_stat_value(adapter, g.main_stat_key, g.main_stat_value),
+                "main_stat_key": g.main_stat_key,
                 "substats": _substat_display(adapter, g),
+                "code": code,
+                "grade": (grade or {}).get("grade"),
+                "grade_rolls": (grade or {}).get("rolls"),
                 "equipped": characters.get(g.equipped_character_id, ""),
                 "locked": g.locked,
                 "favorite": g.favorite,
@@ -778,6 +858,27 @@ def gear(
                 "reasons": evaluation["reasons"] if evaluation else [],
             }
         )
+    sort_key = sort or "slot"
+    reverse = (direction == "desc")
+    grade_rank = {name: index for index, name in enumerate(GRADE_ORDER)}
+    sorters = {
+        "slot": lambda row: (row["slot"] or "9", row["set_key"] or ""),
+        "set": lambda row: (row["set_key"] or "", row["slot"] or "9"),
+        "grade": lambda row: grade_rank.get(row["grade"], len(grade_rank)),
+        "level": lambda row: (row["level"] if row["level"] is not None else -1),
+        "code": lambda row: row["code"],
+        "main": lambda row: (row["main_stat_key"] or "", row["main"]),
+    }
+    # Filter by sorting-code tokens so "which piece do I need?" is answerable:
+    # each comma/space separated token must appear in the disc's code.
+    need_tokens = [t for t in need.replace(",", " ").upper().split() if t]
+    if need_tokens:
+        rolls = [
+            row for row in rolls
+            if all(token in (row["code"] or "").upper() for token in need_tokens)
+        ]
+    sorter = sorters.get(sort_key, sorters["slot"])
+    rolls.sort(key=sorter, reverse=reverse)
     crit_values = [_float_or_none(cr_a), _float_or_none(cd_a), _float_or_none(cr_b), _float_or_none(cd_b)]
     crit_result = None
     crit_priority = None
@@ -826,12 +927,18 @@ def gear(
             {"key": c.key, "name": c.display_name} for c in owned
         ],
         gear_slots=[
-            {"key": s.key, "name": s.name} for s in adapter.gear_slots()
+            {"key": s.key, "name": s.name, "fixed_main": adapter.fixed_main_stat(s.key)}
+            for s in adapter.gear_slots()
         ],
         stat_options=[
             {"key": s.key, "name": s.short or s.name, "kind": s.kind}
             for s in adapter.stat_definitions()
         ],
+        substat_options=_substat_options(adapter),
+        main_stat_max_values=adapter.main_stat_max_values(),
+        grade_order=list(GRADE_ORDER),
+        gear_sort={"sort": sort_key, "direction": direction or "asc", "need": need},
+        grade_character=grade_character,
         gear_labels={
             "discard": sum(1 for row in rolls if row["verdict"] == "likely_safe_to_discard"),
             "strong": sum(1 for row in rolls if row["verdict"] == "strong"),
@@ -1031,9 +1138,20 @@ async def gear_gear_add(request: Request, session: Session = Depends(get_db)):
     valid_slots = {s.key for s in adapter.gear_slots()}
     if slot not in valid_slots:
         return _redirect("/ui/gear", "Pick a slot from the list")
-    main_key = str(form.get("main_stat_key") or "").strip()
+    level_raw = str(form.get("level") or "").strip()
     try:
-        main_value = _input_stat_value(adapter, main_key, str(form.get("main_stat_value") or ""))
+        level = int(level_raw) if level_raw else None
+    except ValueError:
+        return _redirect("/ui/gear", "Level must be a number")
+    # Slots with a fixed main stat (ZZZ 1-3) ignore any submitted main key.
+    fixed_key = adapter.fixed_main_stat(slot)
+    main_key = fixed_key or str(form.get("main_stat_key") or "").strip()
+    raw_main = str(form.get("main_stat_value") or "")
+    if fixed_key and not raw_main.strip():
+        suggested = adapter.auto_main_stat_value(main_key, level)
+        raw_main = "" if suggested is None else str(suggested)
+    try:
+        main_value = _input_stat_value(adapter, main_key, raw_main)
     except ValueError:
         return _redirect("/ui/gear", "Main stat value must be a number")
     try:
@@ -1045,7 +1163,7 @@ async def gear_gear_add(request: Request, session: Session = Depends(get_db)):
                 "set_key": str(form.get("set_key") or "").strip() or None,
                 "slot": slot,
                 "rarity": _rarity_value(str(form.get("rarity") or "")),
-                "level": int(str(form.get("level") or "").strip()) if str(form.get("level") or "").strip() else None,
+                "level": level,
                 "main_stat_key": main_key or None,
                 "main_stat_value": main_value,
                 "substats": _substats_from_form(adapter, form),
@@ -1075,12 +1193,23 @@ def _inventory_choices(session: Session, adapter, game_id: str, player_id: str) 
         set_choices.setdefault(entry.key, entry.display_name)
     return {
         "characters": characters,
+        # The gear-edit form reads character_options; keep the mapping and the
+        # sorted pairs together so both templates work from one context.
+        "character_options": sorted(characters.items()),
         "set_choices": sorted(set_choices.items()),
-        "gear_slots": [{"key": slot.key, "name": slot.name} for slot in adapter.gear_slots()],
+        "gear_slots": [
+            {
+                "key": slot.key,
+                "name": slot.name,
+                "fixed_main": adapter.fixed_main_stat(slot.key),
+            }
+            for slot in adapter.gear_slots()
+        ],
         "stat_options": [
             {"key": stat.key, "name": stat.short or stat.name, "kind": stat.kind}
             for stat in adapter.stat_definitions()
         ],
+        "substat_options": _substat_options(adapter),
         "gear_families": [
             {"key": family.key, "display": family.display} for family in adapter.gear_families()
         ],
@@ -1117,9 +1246,9 @@ def gear_edit(
         display = value
         if stat is not None and stat.kind == "percent" and value is not None:
             display = round(float(value) * 100, 4) if abs(float(value)) <= 1 else value
-        substat_rows.append({"key": key, "value": display})
+        substat_rows.append({"key": key, "value": display, "rolls": sub.get("rolls")})
     while len(substat_rows) < 6:
-        substat_rows.append({"key": "", "value": ""})
+        substat_rows.append({"key": "", "value": "", "rolls": ""})
     main_value_input = item.main_stat_value
     main_stat = stat_by_key.get(item.main_stat_key)
     if main_stat is not None and main_stat.kind == "percent" and main_value_input is not None:
@@ -1156,16 +1285,27 @@ async def gear_edit_save(request: Request, gear_id: str, session: Session = Depe
         if item.game_id != context.active_game or item.player_profile_id != context.player.id:
             return _redirect("/ui/gear", "Gear piece not found")
         form = await request.form()
-        main_key = str(form.get("main_stat_key") or "").strip() or None
+        slot = str(form.get("slot") or "").strip() or item.slot
+        level_raw = str(form.get("level") or "").strip()
         try:
-            main_value = _input_stat_value(adapter, main_key or "", str(form.get("main_stat_value") or ""))
+            level = int(level_raw) if level_raw else None
+        except ValueError:
+            return _redirect(f"/ui/gear/gear/{item.id}/edit", "Level must be a number")
+        fixed_key = adapter.fixed_main_stat(slot)
+        main_key = fixed_key or (str(form.get("main_stat_key") or "").strip() or None)
+        raw_main = str(form.get("main_stat_value") or "")
+        if fixed_key and not raw_main.strip():
+            suggested = adapter.auto_main_stat_value(main_key, level)
+            raw_main = "" if suggested is None else str(suggested)
+        try:
+            main_value = _input_stat_value(adapter, main_key or "", raw_main)
         except ValueError:
             return _redirect(f"/ui/gear/gear/{item.id}/edit", "Main stat value must be a number")
         payload = {
             "set_key": str(form.get("set_key") or "").strip() or item.set_key,
-            "slot": str(form.get("slot") or "").strip() or item.slot,
+            "slot": slot,
             "rarity": _rarity_value(str(form.get("rarity") or "")),
-            "level": int(str(form.get("level") or "").strip()) if str(form.get("level") or "").strip() else None,
+            "level": level,
             "main_stat_key": main_key,
             "main_stat_value": main_value,
             "substats": _substats_from_form(adapter, form),
@@ -1746,6 +1886,8 @@ def character_edit(request: Request, ref: str, session: Session = Depends(get_db
         selected=record,
         choices=_character_field_choices(adapter),
         skill_defs={d.key: d.name for d in adapter.skill_definitions()},
+        skill_rows=service.skill_rows(char),
+        progression_fields=adapter.character_progression_fields() or [],
         dupe_term=adapter.terminology().duplication,
         char_term=adapter.terminology().character,
         equipment_noun=adapter.terminology().equipment,
@@ -1787,6 +1929,12 @@ async def character_edit_save(request: Request, ref: str, session: Session = Dep
         for field in _character_field_choices(adapter)
     }
     data_patch["faction"] = str(form.get("faction") or "").strip() or None
+    # Optional per-character progression fields (e.g. ZZZ Potential Vision).
+    for field in adapter.character_progression_fields() or []:
+        key = field.get("key")
+        if not key:
+            continue
+        data_patch[key] = str(form.get(key) or "").strip() or None
     merged = {**(char.data or {}), **{k: v for k, v in data_patch.items() if v is not None}}
     for key, value in data_patch.items():
         if value is None:
@@ -1795,12 +1943,12 @@ async def character_edit_save(request: Request, ref: str, session: Session = Dep
     try:
         service.update_character(char, patch)
         skill_updates = {
-            key.removeprefix("skill_"): int(value)
+            key.removeprefix("skill_"): str(value)
             for key, value in form.items()
             if key.startswith("skill_") and str(value).strip()
         }
         if skill_updates:
-            service.set_skills(char, skill_updates)
+            service.set_skills_from_text(char, skill_updates)
         char.last_verified_at = utcnow()
         session.commit()
     except Exception as exc:
