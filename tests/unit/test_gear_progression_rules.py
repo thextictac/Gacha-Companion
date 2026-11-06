@@ -64,6 +64,24 @@ def test_substat_rolls_default_to_one_and_sum():
     assert gear_rules.substat_rolls(subs) == {"crit_rate": 2}
 
 
+def test_substat_rolls_tolerate_junk_from_hand_edited_saves():
+    """Stored JSON is user data, so bad roll counts must not raise."""
+    subs: list[dict] = [
+        {"key": "crit_rate", "value": 2.4, "rolls": "two"},
+        {"key": "crit_dmg", "value": 4.8, "rolls": 2.9},
+        {"key": "atk_pct", "value": 3.0, "rolls": -4},
+        {"key": "pen", "value": 9.0, "rolls": float("inf")},
+        {"key": "hp_pct", "value": 3.0, "rolls": None},
+    ]
+    assert gear_rules.substat_rolls(subs) == {
+        "crit_rate": 1,
+        "crit_dmg": 2,
+        "atk_pct": 1,
+        "pen": 1,
+        "hp_pct": 1,
+    }
+
+
 def test_substat_code_uses_canonical_order_and_roll_counts():
     subs: list[dict] = [
         {"key": "crit_dmg", "value": 9.6, "rolls": 2},

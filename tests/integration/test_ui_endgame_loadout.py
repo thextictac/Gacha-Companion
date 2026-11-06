@@ -188,3 +188,52 @@ def test_gear_page_compares_crit_builds_with_published_floor(client, ui_player):
     assert "Build A wins" in page.text
     assert "75%" in page.text
     assert "Published Crit Rate floor" in page.text
+
+
+def test_gear_page_survives_hand_edited_substat_json(client, ui_player):
+    """Regression: /ui/gear returned 500 when stored substats were malformed.
+
+    The gear table renders grading and shorthand codes for every row, so one
+    bad JSON entry (text value, junk roll count, nested object) used to take
+    down the whole page. Every shape below must render.
+    """
+    from game_companion.db.models import GearItem
+    from game_companion.db.session import create_session_factory
+
+    make_character(client, "zzz", "anby", player_id=ui_player)
+    hostile = {
+        "text_value": [{"key": "crit_rate", "value": "0.1", "rolls": 2}],
+        "text_rolls": [{"key": "crit_rate", "value": 0.1, "rolls": "many"}],
+        "nested_value": [{"key": "crit_rate", "value": {"nested": 1}, "rolls": 1}],
+        "negative_rolls": [{"key": "crit_dmg", "value": 0.48, "rolls": -3}],
+        "junk_entries": [None, "x", 7, {"key": None}, {"key": "crit_rate"}],
+    }
+    session = create_session_factory(client.app.state.engine)()
+    try:
+        for name, substats in hostile.items():
+            session.add(
+                GearItem(
+                    game_id="zzz",
+                    player_profile_id=ui_player,
+                    gear_type="disc",
+                    set_key="woodpecker_electro",
+                    slot="4",
+                    rarity="S",
+                    level=15,
+                    main_stat_key="crit_rate",
+                    main_stat_value=0.24,
+                    substats=substats,
+                    data={},
+                    source="manual",
+                    id=f"hostile_{name}",
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    for sort in ("grade", "code", "main", "set", "level", "slot"):
+        page = client.get(f"/ui/gear?sort={sort}")
+        assert page.status_code == 200, f"sort={sort} -> {page.status_code}"
+    edit = client.get("/ui/gear/gear/hostile_text_value/edit")
+    assert edit.status_code == 200, edit.text

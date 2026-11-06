@@ -77,12 +77,18 @@ def _format_stat_value(adapter, key: str | None, value: float | None) -> str:
         return "—"
     stat = _stat_lookup(adapter).get(key)
     name = stat.name if stat else key
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        # Imported/legacy rows may hold free text here; never fail a whole page
+        # over one unparseable cell.
+        return f"{name} {value}"
     if stat is not None and stat.kind == "percent":
         # API/imported rows normally store 0..1, but hand-entered legacy rows
         # sometimes store whole percentages (24 instead of 0.24).
-        shown = value * 100 if abs(value) <= 1 else value
+        shown = number * 100 if abs(number) <= 1 else number
         return f"{name} {shown:g}%"
-    return f"{name} {value:g}"
+    return f"{name} {number:g}"
 
 
 def _input_stat_value(adapter, key: str, raw: str) -> float | None:
@@ -1245,18 +1251,26 @@ def gear_edit(
         stat = stat_by_key.get(key)
         display = value
         if stat is not None and stat.kind == "percent" and value is not None:
-            display = round(float(value) * 100, 4) if abs(float(value)) <= 1 else value
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                number = None
+            if number is not None:
+                display = round(number * 100, 4) if abs(number) <= 1 else value
         substat_rows.append({"key": key, "value": display, "rolls": sub.get("rolls")})
     while len(substat_rows) < 6:
         substat_rows.append({"key": "", "value": "", "rolls": ""})
     main_value_input = item.main_stat_value
     main_stat = stat_by_key.get(item.main_stat_key)
     if main_stat is not None and main_stat.kind == "percent" and main_value_input is not None:
-        main_value_input = (
-            round(float(main_value_input) * 100, 4)
-            if abs(float(main_value_input)) <= 1
-            else main_value_input
-        )
+        try:
+            main_number = float(main_value_input)
+        except (TypeError, ValueError):
+            main_number = None
+        if main_number is not None:
+            main_value_input = (
+                round(main_number * 100, 4) if abs(main_number) <= 1 else main_value_input
+            )
     choices = _inventory_choices(session, adapter, context.active_game, context.player.id)
     return _ctx(
         request,

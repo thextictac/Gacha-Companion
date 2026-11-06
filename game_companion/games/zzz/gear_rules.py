@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 from game_companion.core.games.base import (
@@ -133,6 +133,21 @@ def substat_code(substats: Sequence[Mapping[str, Any]] | None) -> str:
     return "".join(parts)
 
 
+def _safe_rolls(rolls: Any) -> int:
+    """Coerce a stored roll count to a usable positive int.
+
+    Hand-entered JSON is untrusted: it may hold text, floats, nulls, or
+    negatives, and a bad value must never take down the gear page.
+    """
+    if rolls is None:
+        return 1
+    try:
+        count = int(float(rolls))
+    except (TypeError, ValueError, OverflowError):
+        return 1
+    return max(1, count)
+
+
 def substat_rolls(substats: Sequence[Mapping[str, Any]] | None) -> dict[str, int]:
     """Roll count per substat key, in the disc's own order."""
     counts: dict[str, int] = {}
@@ -142,8 +157,7 @@ def substat_rolls(substats: Sequence[Mapping[str, Any]] | None) -> dict[str, int
         key = str(sub.get("key") or "")
         if not key:
             continue
-        rolls = sub.get("rolls")
-        count = 1 if rolls is None else max(1, int(rolls))
+        count = _safe_rolls(sub.get("rolls"))
         counts[key] = counts.get(key, 0) + count
     return counts
 
@@ -336,6 +350,31 @@ ARCHETYPE_WEIGHTS: dict[str, dict[str, float]] = {
 }
 
 
+def _iter_substat_values(
+    substats: Sequence[Mapping[str, Any]] | None,
+) -> Iterator[tuple[str, float]]:
+    """Yield ``(key, value)`` for usable substats, skipping malformed entries.
+
+    Stored JSON is player-entered, so entries may be null, non-object, missing a
+    key, or carry a non-numeric value. Grading must never 500 the page on such
+    a row: unusable entries are simply ignored.
+    """
+    for sub in substats or []:
+        if not isinstance(sub, Mapping):
+            continue
+        key = sub.get("key")
+        if not key:
+            continue
+        raw = sub.get("value")
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        yield str(key), value
+
+
 def _archetype_score(
     gear: Mapping[str, Any], specialty: str, reasons: list[str]
 ) -> tuple[float, float, list[str]]:
@@ -360,17 +399,13 @@ def _archetype_score(
 
     sub_score = 0.0
     sub_notes: list[str] = []
-    for sub in gear.get("substats") or []:
-        key = sub.get("key")
-        value = sub.get("value")
-        if not key or value is None:
-            continue
+    for key, value in _iter_substat_values(gear.get("substats")):
         weight = weights.get(key, 0.0)
         ref_max = SUBSTAT_REFERENCE_MAX.get(key)
         if weight <= 0 or not ref_max:
             sub_notes.append(f"{key} not weighted for {specialty}")
             continue
-        sub_score += weight * min(float(value) / ref_max, 1.0)
+        sub_score += weight * min(value / ref_max, 1.0)
         sub_notes.append(f"{key} {value:g}")
     score = 100 * (0.45 * main_fit + 0.55 * min(sub_score, 1.0))
     return score, main_fit, local_reasons + (["substats considered: " + ", ".join(sub_notes)] if sub_notes else [])
@@ -437,13 +472,11 @@ def score_gear(gear: Mapping[str, Any], context: Mapping[str, Any], meta_lookup)
 def _subscore(gear: Mapping[str, Any], specialty: str) -> float:
     weights = ARCHETYPE_WEIGHTS.get(specialty, ARCHETYPE_WEIGHTS["attack"])
     total = 0.0
-    for sub in gear.get("substats") or []:
-        key = sub.get("key")
-        value = sub.get("value")
-        ref_max = SUBSTAT_REFERENCE_MAX.get(key or "")
-        if not key or value is None or not ref_max:
+    for key, value in _iter_substat_values(gear.get("substats")):
+        ref_max = SUBSTAT_REFERENCE_MAX.get(key)
+        if not ref_max:
             continue
-        total += weights.get(key, 0.0) * min(float(value) / ref_max, 1.0)
+        total += weights.get(key, 0.0) * min(value / ref_max, 1.0)
     return total
 
 
