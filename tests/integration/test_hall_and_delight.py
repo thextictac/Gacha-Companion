@@ -266,3 +266,22 @@ def test_trackers_codes_grouping_and_redeem_celebration(client, player):
     after = client.get("/ui/trackers").text
     assert "Redeemed (1)" in after
     assert 'data-copy="ZZZLIVE100"' not in after
+
+
+def test_hall_sorts_string_rarity_labels(client, player):
+    """Some games store rarity as a label ("S"); the Hall must not crash on it."""
+    from game_companion.db.models import Character
+    from game_companion.db.session import create_session_factory
+
+    client.post(f"/api/games/zzz/characters?player_id={player}", json={"key": "burnice"})
+    client.post(f"/api/games/zzz/characters?player_id={player}", json={"key": "anby"})
+    session = create_session_factory(client.app.state.engine)()
+    session.query(Character).filter(Character.player_profile_id == player).update(
+        {Character.rarity: "S"}
+    )
+    session.commit()
+    session.close()
+
+    page = client.get("/ui/hall")
+    assert page.status_code == 200
+    assert "Burnice" in page.text

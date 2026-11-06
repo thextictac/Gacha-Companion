@@ -118,6 +118,18 @@ def _rarity_value(raw: str) -> int | str | None:
         return text
 
 
+_RARITY_RANK = {"S": 5, "A": 4, "B": 3, "SSR": 5, "SR": 4, "R": 3}
+
+
+def _rarity_rank(value: object) -> int:
+    """Sort key for rarity, which is an int in some games and a label in others."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    return _RARITY_RANK.get(str(value or "").strip().upper(), 0)
+
+
 def _substats_from_form(adapter, form) -> list[dict]:
     """Read substat_key_N / substat_value_N / substat_rolls_N rows from a form."""
     out: list[dict] = []
@@ -480,7 +492,7 @@ def hall(request: Request, session: Session = Depends(get_db)):
         }
 
     cards = [card(c) for c in owned]
-    cards.sort(key=lambda x: (-(x["rarity"] or 0), x["name"].lower()))
+    cards.sort(key=lambda x: (-_rarity_rank(x["rarity"]), (x["name"] or "").lower()))
 
     teams = TeamRepository(session).list_all(game_id=game_id, player_profile_id=player_id)
     active_team = next((t for t in teams if t.is_active), None)
