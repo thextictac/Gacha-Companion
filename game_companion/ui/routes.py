@@ -42,7 +42,7 @@ from game_companion.db.repositories import (
     TeamRepository,
 )
 from game_companion.ui import state as ui_state
-from game_companion.utils import to_iso
+from game_companion.utils import as_dict, as_list, to_iso
 
 # Grade bands, best-first, as presented in the UI. Adapters return one of these
 # names (or nothing); sorting uses this order so ZERO/GOD land at the top.
@@ -130,6 +130,27 @@ def _rarity_rank(value: object) -> int:
     return _RARITY_RANK.get(str(value or "").strip().upper(), 0)
 
 
+def _sort_text(value: object, default: str = "") -> str:
+    """String sort key that tolerates ints/None stored in text columns."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return str(int(value))
+    return str(value)
+
+
+def _sort_number(value: object, default: float = -1) -> float:
+    """Numeric sort key that tolerates strings/None stored in int columns."""
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _substats_from_form(adapter, form) -> list[dict]:
     """Read substat_key_N / substat_value_N / substat_rolls_N rows from a form."""
     out: list[dict] = []
@@ -167,7 +188,7 @@ def _substat_options(adapter) -> list[dict]:
 
 def _substat_display(adapter, gear) -> list[dict]:
     out = []
-    for sub in gear.substats or []:
+    for sub in as_list(gear.substats):
         if not isinstance(sub, dict):
             continue
         key = sub.get("key")
@@ -190,7 +211,7 @@ def _gear_evaluation(adapter, gear, owned_specialties: list[str]) -> dict | None
                 "level": gear.level,
                 "main_stat_key": gear.main_stat_key,
                 "main_stat_value": gear.main_stat_value,
-                "substats": gear.substats or [],
+                "substats": as_list(gear.substats),
             },
             {"owned_specialties": owned_specialties},
         )
@@ -225,12 +246,12 @@ def _loadout_context(session: Session, adapter, char, service: RosterService) ->
         try:
             grade = adapter.disc_grade(
                 {"slot": item.slot, "main_stat_key": item.main_stat_key,
-                 "substats": item.substats or [], "set_key": item.set_key},
+                 "substats": as_list(item.substats), "set_key": item.set_key},
                 priority_keys,
             )
         except NotImplementedError:
             grade = None
-        code = adapter.substat_code(item.substats or [])
+        code = adapter.substat_code(as_list(item.substats))
         grade_name = (grade or {}).get("grade")
         extras = " · ".join(part for part in (code, grade_name) if part)
         by_slot[item.slot].append(
@@ -470,8 +491,8 @@ def hall(request: Request, session: Session = Depends(get_db)):
     }
 
     def card(c) -> dict:
-        element = (c.data or {}).get("attribute")
-        d = sorted(discs_by_char.get(c.id, []), key=lambda g: g.slot or "")
+        element = as_dict(c.data).get("attribute")
+        d = sorted(discs_by_char.get(c.id, []), key=lambda g: _sort_text(g.slot, "9"))
         return {
             "key": c.key,
             "name": c.display_name,
@@ -482,7 +503,7 @@ def hall(request: Request, session: Session = Depends(get_db)):
             "portrait": adapter.media_url("character", c.key),
             "element": element,
             "element_icon": adapter.media_url("element", element) if element else None,
-            "specialty": (c.data or {}).get("specialty"),
+            "specialty": as_dict(c.data).get("specialty"),
             "engine_icon": adapter.media_url("equipment", engine_by_char[c.id].key)
             if c.id in engine_by_char else None,
             "engine_name": engine_by_char[c.id].display_name if c.id in engine_by_char else None,
@@ -639,7 +660,8 @@ def teams(
     adapter = adapter_for(context.active_game)
     roster_rows = CharacterRepository(session).search(context.active_game, context.player.id)
     owned = sorted(
-        (c for c in roster_rows if c.owned), key=lambda c: c.display_name.lower()
+        (c for c in roster_rows if c.owned),
+        key=lambda c: _sort_text(c.display_name).lower(),
     )
     by_id = {c.id: c for c in roster_rows}
     rows = TeamRepository(session).list_all(
@@ -821,9 +843,9 @@ def gear(
     )
     owned_specialties = sorted(
         {
-            c.data.get("specialty") or (adapter.character_meta(c.key) or {}).get("specialty")
+            as_dict(c.data).get("specialty") or (adapter.character_meta(c.key) or {}).get("specialty")
             for c in owned
-            if (c.data.get("specialty") or (adapter.character_meta(c.key) or {}).get("specialty"))
+            if (as_dict(c.data).get("specialty") or (adapter.character_meta(c.key) or {}).get("specialty"))
         }
     )
     equipment = EquipmentRepository(session).search(context.active_game, context.player.id)
@@ -847,14 +869,14 @@ def gear(
                 {
                     "slot": g.slot,
                     "main_stat_key": g.main_stat_key,
-                    "substats": g.substats or [],
+                    "substats": as_list(g.substats),
                     "set_key": g.set_key,
                 },
                 priority_keys,
             )
         except NotImplementedError:
             grade = None
-        code = adapter.substat_code(g.substats or [])
+        code = adapter.substat_code(as_list(g.substats))
         rolls.append(
             {
                 "id": g.id,
@@ -879,13 +901,17 @@ def gear(
     sort_key = sort or "slot"
     reverse = (direction == "desc")
     grade_rank = {name: index for index, name in enumerate(GRADE_ORDER)}
+    # Stored columns are loosely typed (SQLite keeps whatever was written and
+    # older rows may hold an int where a string is expected). Coerce before
+    # comparing, otherwise a mixed-type key raises TypeError from list.sort and
+    # takes down the page -- see the "_sort_*" helpers above.
     sorters = {
-        "slot": lambda row: (row["slot"] or "9", row["set_key"] or ""),
-        "set": lambda row: (row["set_key"] or "", row["slot"] or "9"),
+        "slot": lambda row: (_sort_text(row["slot"], "9"), _sort_text(row["set_key"])),
+        "set": lambda row: (_sort_text(row["set_key"]), _sort_text(row["slot"], "9")),
         "grade": lambda row: grade_rank.get(row["grade"], len(grade_rank)),
-        "level": lambda row: (row["level"] if row["level"] is not None else -1),
-        "code": lambda row: row["code"],
-        "main": lambda row: (row["main_stat_key"] or "", row["main"]),
+        "level": lambda row: _sort_number(row["level"], -1),
+        "code": lambda row: _sort_text(row["code"]),
+        "main": lambda row: (_sort_text(row["main_stat_key"]), _sort_text(row["main"])),
     }
     # Filter by sorting-code tokens so "which piece do I need?" is answerable:
     # each comma/space separated token must appear in the disc's code.
@@ -1255,7 +1281,7 @@ def gear_edit(
         return _redirect("/ui/gear", "Gear piece not found")
     stat_by_key = _stat_lookup(adapter)
     substat_rows = []
-    for sub in item.substats or []:
+    for sub in as_list(item.substats):
         if not isinstance(sub, dict):
             continue
         key = sub.get("key")
@@ -1961,7 +1987,7 @@ async def character_edit_save(request: Request, ref: str, session: Session = Dep
         if not key:
             continue
         data_patch[key] = str(form.get(key) or "").strip() or None
-    merged = {**(char.data or {}), **{k: v for k, v in data_patch.items() if v is not None}}
+    merged = {**as_dict(char.data), **{k: v for k, v in data_patch.items() if v is not None}}
     for key, value in data_patch.items():
         if value is None:
             merged.pop(key, None)  # cleared in the form → gone from the record

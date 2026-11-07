@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin, UTCDateTime
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON, UTCDateTime
 
 CATALOG_CHARACTER = "character"
 CATALOG_EQUIPMENT = "equipment"
@@ -32,7 +32,7 @@ class CatalogEntry(PKMixin, TimestampMixin, Base):
     key: Mapped[str] = mapped_column(String(120))
     display_name: Mapped[str] = mapped_column(String(200))
     rarity: Mapped[int | None] = mapped_column(Integer, default=None)
-    meta: Mapped[dict | None] = mapped_column(JSON, default=dict, nullable=True)
+    meta: Mapped[dict | None] = mapped_column(TolerantJSON, default=dict, nullable=True)
     source: Mapped[str | None] = mapped_column(String(60), default=None)
     fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), default=None)
 

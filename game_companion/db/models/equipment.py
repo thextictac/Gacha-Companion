@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin, UTCDateTime
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON, UTCDateTime
 
 
 class EquipmentItem(PKMixin, TimestampMixin, Base):
@@ -28,6 +28,6 @@ class EquipmentItem(PKMixin, TimestampMixin, Base):
     )
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
     source: Mapped[str] = mapped_column(String(40), default="manual")
     last_verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), default=None)

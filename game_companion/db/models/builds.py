@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON
 
 
 class CharacterBuild(PKMixin, TimestampMixin, Base):
@@ -25,7 +25,7 @@ class CharacterBuild(PKMixin, TimestampMixin, Base):
         ForeignKey("equipment_items.id", ondelete="SET NULL"), default=None
     )
     notes: Mapped[str | None] = mapped_column(Text, default=None)
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
 
     gear_slots: Mapped[list[BuildGearSlot]] = relationship(
         back_populates="build", cascade="all, delete-orphan", lazy="selectin"

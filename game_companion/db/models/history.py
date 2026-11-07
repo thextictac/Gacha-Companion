@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin, UTCDateTime
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON, UTCDateTime
 
 
 class CombatResult(PKMixin, TimestampMixin, Base):
@@ -27,8 +27,8 @@ class CombatResult(PKMixin, TimestampMixin, Base):
         ForeignKey("teams.id", ondelete="SET NULL"), default=None
     )
     # {"members": [{"key","display_name","level","duplication_level"}...], "name": ...}
-    team_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
-    build_snapshot: Mapped[dict | None] = mapped_column(JSON, default=None)
+    team_snapshot: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
+    build_snapshot: Mapped[dict | None] = mapped_column(TolerantJSON, default=None)
     score: Mapped[float | None] = mapped_column(Float, default=None)
     rank: Mapped[str | None] = mapped_column(String(40), default=None)
     stars: Mapped[int | None] = mapped_column(Integer, default=None)
@@ -37,7 +37,7 @@ class CombatResult(PKMixin, TimestampMixin, Base):
     retries: Mapped[int | None] = mapped_column(Integer, default=None)
     difficulty: Mapped[str | None] = mapped_column(String(40), default=None)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
 
 
 class TrainingIssue(PKMixin, TimestampMixin, Base):
@@ -51,7 +51,7 @@ class TrainingIssue(PKMixin, TimestampMixin, Base):
     description: Mapped[str] = mapped_column(Text)
     severity: Mapped[str] = mapped_column(String(20), default="medium")
     status: Mapped[str] = mapped_column(String(20), default="open")  # open|watch|resolved
-    character_keys: Mapped[list] = mapped_column(JSON, default=list)
+    character_keys: Mapped[list] = mapped_column(TolerantJSON, default=list)
     first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=None)
     last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=None)
     occurrences: Mapped[int] = mapped_column(Integer, default=1)
@@ -67,5 +67,5 @@ class TrainingGoal(PKMixin, TimestampMixin, Base):
     )
     description: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="active")  # active|done|dropped
-    target: Mapped[dict | None] = mapped_column(JSON, default=None)
+    target: Mapped[dict | None] = mapped_column(TolerantJSON, default=None)
     progress_notes: Mapped[str | None] = mapped_column(Text, default=None)

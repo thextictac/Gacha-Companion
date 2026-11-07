@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON
 
 
 class Resource(PKMixin, TimestampMixin, Base):
@@ -21,7 +21,7 @@ class Resource(PKMixin, TimestampMixin, Base):
     resource_key: Mapped[str] = mapped_column(String(80))
     quantity: Mapped[int] = mapped_column(Integer, default=0)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
 
 
 class ResourcePlanEntry(PKMixin, TimestampMixin, Base):

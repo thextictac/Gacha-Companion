@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin, UTCDateTime
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON, UTCDateTime
 
 
 class Encounter(PKMixin, TimestampMixin, Base):
@@ -18,7 +18,7 @@ class Encounter(PKMixin, TimestampMixin, Base):
     key: Mapped[str] = mapped_column(String(80))
     name: Mapped[str] = mapped_column(String(160))
     mode: Mapped[str] = mapped_column(String(60), default="endgame")
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
 
     slots: Mapped[list[EncounterSlot]] = relationship(
         back_populates="encounter", cascade="all, delete-orphan", lazy="selectin",
@@ -34,7 +34,7 @@ class EncounterSlot(PKMixin, Base):
         ForeignKey("encounters.id", ondelete="CASCADE"), index=True
     )
     slot_index: Mapped[int] = mapped_column(Integer)
-    constraints: Mapped[dict] = mapped_column(JSON, default=dict)
+    constraints: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
 
     encounter: Mapped[Encounter] = relationship(back_populates="slots")
 
@@ -48,8 +48,8 @@ class Recommendation(PKMixin, TimestampMixin, Base):
     )
     kind: Mapped[str] = mapped_column(String(60))  # team|gear|upgrade|audit|allocation
     subject: Mapped[str] = mapped_column(String(120))
-    payload: Mapped[dict] = mapped_column(JSON, default=dict)
-    basis: Mapped[dict] = mapped_column(JSON, default=dict)
+    payload: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
+    basis: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
 
 
 class AuditResult(PKMixin, TimestampMixin, Base):
@@ -63,7 +63,7 @@ class AuditResult(PKMixin, TimestampMixin, Base):
         ForeignKey("characters.id", ondelete="SET NULL"), default=None
     )
     status: Mapped[str] = mapped_column(String(40), default="ok")
-    issues: Mapped[list] = mapped_column(JSON, default=list)
+    issues: Mapped[list] = mapped_column(TolerantJSON, default=list)
     checked_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=None)
 
 

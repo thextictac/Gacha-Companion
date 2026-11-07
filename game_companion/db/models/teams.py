@@ -7,10 +7,10 @@ TeamService and exercised by the optimizer).
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON
 
 
 class Team(PKMixin, TimestampMixin, Base):
@@ -24,7 +24,7 @@ class Team(PKMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(120))
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
 
     members: Mapped[list[TeamMember]] = relationship(
         back_populates="team", cascade="all, delete-orphan", lazy="selectin",
@@ -42,6 +42,6 @@ class TeamMember(PKMixin, Base):
     )
     position: Mapped[int] = mapped_column(Integer, default=0)
     role: Mapped[str | None] = mapped_column(String(40), default=None)
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
 
     team: Mapped[Team] = relationship(back_populates="members")

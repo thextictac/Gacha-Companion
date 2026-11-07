@@ -28,6 +28,7 @@ from game_companion.games.zzz import gear_rules, resource_rules, team_rules
 from game_companion.games.zzz import sources as zzz_sources
 from game_companion.games.zzz.stats import SKILL_DEFINITIONS, STAT_DEFINITIONS
 from game_companion.games.zzz.terminology import ATTRIBUTE_NAMES, SPECIALTY_NAMES
+from game_companion.utils import as_list
 
 
 def _prompt(name: str) -> str:
@@ -226,7 +227,7 @@ class ZZZAdapter(GameAdapter):
         return None
 
     def substat_code(self, substats: Sequence[Mapping[str, Any]] | None) -> str:
-        return gear_rules.substat_code(list(substats or []))
+        return gear_rules.substat_code([s for s in as_list(substats) if isinstance(s, Mapping)])
 
     def farm_stages(self) -> list[dict[str, Any]]:
         from game_companion.games.zzz import farm as zzz_farm
@@ -427,8 +428,6 @@ class ZZZAdapter(GameAdapter):
         return cleaned
 
     def character_field_choices(self) -> dict[str, list[str]]:
-        from game_companion.games.zzz.terminology import ATTRIBUTE_NAMES, SPECIALTY_NAMES
-
         return {
             "attribute": sorted(ATTRIBUTE_NAMES),
             "specialty": sorted(SPECIALTY_NAMES),

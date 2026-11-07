@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin, UTCDateTime
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON, UTCDateTime
 
 
 class Character(PKMixin, TimestampMixin, Base):
@@ -27,7 +27,7 @@ class Character(PKMixin, TimestampMixin, Base):
     favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text, default=None)
     # Game-specific extras (adapter-validated), e.g. ZZZ attribute/specialty hints.
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
     source: Mapped[str] = mapped_column(String(40), default="manual")
     last_verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), default=None)
 
@@ -45,6 +45,6 @@ class CharacterSkill(PKMixin, TimestampMixin, Base):
     )
     skill_key: Mapped[str] = mapped_column(String(60))
     level: Mapped[int | None] = mapped_column(Integer, default=None)
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
 
     character: Mapped[Character] = relationship(back_populates="skills")

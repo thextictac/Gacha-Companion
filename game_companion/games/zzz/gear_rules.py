@@ -12,6 +12,7 @@ from game_companion.core.games.base import (
     GearSlotDefinition,
     ScoreComponent,
 )
+from game_companion.utils import as_list
 
 # Slot main-stat pools are a VERIFIED MECHANIC (v3.2): slots 1-3 are fixed
 # (flat HP / ATK / DEF); slot 4 can roll CRIT stats; slot 5 carries elemental
@@ -151,7 +152,7 @@ def _safe_rolls(rolls: Any) -> int:
 def substat_rolls(substats: Sequence[Mapping[str, Any]] | None) -> dict[str, int]:
     """Roll count per substat key, in the disc's own order."""
     counts: dict[str, int] = {}
-    for sub in substats or []:
+    for sub in as_list(substats):
         if not isinstance(sub, Mapping):
             continue
         key = str(sub.get("key") or "")
@@ -359,7 +360,7 @@ def _iter_substat_values(
     key, or carry a non-numeric value. Grading must never 500 the page on such
     a row: unusable entries are simply ignored.
     """
-    for sub in substats or []:
+    for sub in as_list(substats):
         if not isinstance(sub, Mapping):
             continue
         key = sub.get("key")

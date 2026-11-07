@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Float, ForeignKey, String, Text
+from sqlalchemy import Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin, UTCDateTime
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON, UTCDateTime
 
 IMPORT_PENDING = "pending"
 IMPORT_APPLIED = "applied"
@@ -27,10 +27,10 @@ class ScreenshotImport(PKMixin, TimestampMixin, Base):
     screenshot_hash: Mapped[str | None] = mapped_column(String(64), default=None)
     status: Mapped[str] = mapped_column(String(20), default=IMPORT_PENDING, index=True)
     # Validated candidate payload (adapter schema), never applied on its own.
-    candidate: Mapped[dict] = mapped_column(JSON, default=dict)
-    diff: Mapped[dict | None] = mapped_column(JSON, default=None)
+    candidate: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
+    diff: Mapped[dict | None] = mapped_column(TolerantJSON, default=None)
     confidence: Mapped[float | None] = mapped_column(Float, default=None)
-    extracted_fields: Mapped[list] = mapped_column(JSON, default=list)
-    rejected_fields: Mapped[list] = mapped_column(JSON, default=list)
+    extracted_fields: Mapped[list] = mapped_column(TolerantJSON, default=list)
+    rejected_fields: Mapped[list] = mapped_column(TolerantJSON, default=list)
     applied_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)

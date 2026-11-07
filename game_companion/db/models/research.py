@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin, UTCDateTime
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON, UTCDateTime
 
 # Claim types, ordered by decreasing authority.
 CLAIM_OFFICIAL_FACT = "official_fact"
@@ -59,7 +59,7 @@ class ResearchClaim(PKMixin, TimestampMixin, Base):
     confidence: Mapped[float | None] = mapped_column(Float, default=None)
     retrieved_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=None)
     # List of {"url", "quote", "retrieved_at"} evidence items backing the claim.
-    evidence: Mapped[list] = mapped_column(JSON, default=list)
+    evidence: Mapped[list] = mapped_column(TolerantJSON, default=list)
     superseded: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
@@ -73,12 +73,12 @@ class ChangeRecord(PKMixin, TimestampMixin, Base):
     entity_type: Mapped[str] = mapped_column(String(60))  # e.g. "character", "source_fact", "code"
     entity_key: Mapped[str] = mapped_column(String(120))
     detected_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=None)
-    previous_value: Mapped[dict | None] = mapped_column(JSON, default=None)
-    proposed_value: Mapped[dict] = mapped_column(JSON, default=dict)
+    previous_value: Mapped[dict | None] = mapped_column(TolerantJSON, default=None)
+    proposed_value: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
     source_id: Mapped[str | None] = mapped_column(
         ForeignKey("research_sources.id", ondelete="SET NULL"), default=None
     )
-    evidence: Mapped[list | None] = mapped_column(JSON, default=None)
+    evidence: Mapped[list | None] = mapped_column(TolerantJSON, default=None)
     confidence: Mapped[float | None] = mapped_column(Float, default=None)
     review_status: Mapped[str] = mapped_column(String(20), default=CHANGE_PENDING, index=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), default=None)

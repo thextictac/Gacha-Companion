@@ -19,6 +19,7 @@ from game_companion.core.teams.scoring import (
 )
 from game_companion.db.repositories import EncounterRepository, PlayerRepository
 from game_companion.errors import NotFoundError
+from game_companion.utils import as_dict
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ def resolve_encounter(
         return EncounterPlanSpec(
             key=encounter.key,
             name=encounter.name,
-            description=str((encounter.data or {}).get("description") or ""),
+            description=str(as_dict(encounter.data).get("description") or ""),
             slot_count=slot_count,
             slot_constraints=slot_constraints,
             source="saved",

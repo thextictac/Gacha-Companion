@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from game_companion.core.games.base import GameAdapter
 from game_companion.db.models import Character, GearItem
 from game_companion.db.repositories import CharacterRepository, GearRepository
+from game_companion.utils import as_dict
 
 
 def gear_payload(gear: GearItem) -> dict:
@@ -25,7 +26,7 @@ def _owned_specialties(session: Session, adapter: GameAdapter, game_id: str, pla
     specialties: set[str] = set()
     for char in CharacterRepository(session).search(game_id, player_id, owned=True):
         meta = adapter.character_meta(char.key) or {}
-        specialty = char.data.get("specialty") or meta.get("specialty")
+        specialty = as_dict(char.data).get("specialty") or meta.get("specialty")
         if specialty:
             specialties.add(specialty)
     return sorted(specialties)
@@ -45,7 +46,7 @@ def evaluate_gear_item(
     if character is not None:
         meta = adapter.character_meta(character.key) or {}
         context["character_key"] = character.key
-        context["specialty"] = character.data.get("specialty") or meta.get("specialty")
+        context["specialty"] = as_dict(character.data).get("specialty") or meta.get("specialty")
     evaluation = adapter.score_gear(gear_payload(gear), context)
     return {
         "gear_id": gear.id,
@@ -99,7 +100,7 @@ def evaluate_inventory(
             continue  # best-for lists consider free pieces only
         for char in characters:
             meta = adapter.character_meta(char.key) or {}
-            specialty = char.data.get("specialty") or meta.get("specialty")
+            specialty = as_dict(char.data).get("specialty") or meta.get("specialty")
             scored_for = evaluate_gear_item(
                 session, adapter, game_id, player_id, item,
                 character=char if specialty else None,

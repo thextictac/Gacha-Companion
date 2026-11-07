@@ -6,10 +6,10 @@ everything else uses the standard string PK convention.
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON
 
 
 class Conversation(PKMixin, TimestampMixin, Base):
@@ -37,7 +37,7 @@ class ChatMessage(Base):
     role: Mapped[str] = mapped_column(String(20))  # user | assistant | tool
     content: Mapped[str] = mapped_column(Text, default="")
     # assistant: raw tool_calls payload; tool: which call this row answers.
-    tool_calls: Mapped[dict | None] = mapped_column(JSON, default=None)
+    tool_calls: Mapped[dict | None] = mapped_column(TolerantJSON, default=None)
     tool_call_id: Mapped[str | None] = mapped_column(String(80), default=None)
     tool_name: Mapped[str | None] = mapped_column(String(80), default=None)
 

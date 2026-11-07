@@ -54,6 +54,11 @@ def read_state(settings: Settings) -> UiState:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return UiState()
+    # Valid JSON that is not an object (e.g. a list, string, or number) would
+    # make ``.get`` raise and take down every UI page. Treat it as absent state
+    # so the caller falls back to the sole/first profile instead of erroring.
+    if not isinstance(raw, dict):
+        return UiState()
     return UiState(
         player_id=raw.get("player_id") or None,
         active_game=raw.get("active_game") or None,

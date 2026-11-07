@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin, UTCDateTime
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON, UTCDateTime
 
 
 class GearItem(PKMixin, TimestampMixin, Base):
@@ -26,13 +26,13 @@ class GearItem(PKMixin, TimestampMixin, Base):
     main_stat_key: Mapped[str | None] = mapped_column(String(40), default=None)
     main_stat_value: Mapped[float | None] = mapped_column(Float, default=None)
     # List of {"key": str, "value": float, "rolls": int | None} entries.
-    substats: Mapped[list] = mapped_column(JSON, default=list)
+    substats: Mapped[list] = mapped_column(TolerantJSON, default=list)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     equipped_character_id: Mapped[str | None] = mapped_column(
         ForeignKey("characters.id", ondelete="SET NULL"), index=True, default=None
     )
     notes: Mapped[str | None] = mapped_column(Text, default=None)
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(TolerantJSON, default=dict)
     source: Mapped[str] = mapped_column(String(40), default="manual")
     last_verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), default=None)

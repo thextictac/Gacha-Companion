@@ -52,3 +52,50 @@ def test_character_edit_accepts_core_letter_and_potential(client, ui_player):
     assert anby["skills"]["core_skill"] == 6
     assert anby["skills"]["basic_attack"] == 16
     assert anby["data"].get("potential_vision") == "6"
+
+
+def test_gear_sorts_survive_loosely_typed_rows(client, ui_player):
+    """A hand-edited/legacy DB can hold an int where a string belongs (and back).
+
+    Sorting used to raise TypeError from list.sort on the mixed-type key and
+    return 500. Every sort option must tolerate it.
+    """
+    from sqlalchemy import text
+
+    from game_companion.db.session import create_db_engine
+
+    settings = client.app.state.settings
+    engine = create_db_engine(settings.resolved_database_url)
+    with engine.begin() as session:
+        for i, (slot, level, set_key, main_key) in enumerate(
+            [
+                ("4", 15, "set_a", "crit_rate"),
+                (4, "12", 5, 9),
+                (None, None, None, None),
+            ]
+        ):
+            session.execute(
+                text(
+                    "insert or replace into gear_items (id, game_id, player_profile_id,"
+                    " set_key, slot, rarity, level, main_stat_key, main_stat_value,"
+                    " substats, locked, favorite, data, gear_type, source,"
+                    " created_at, updated_at) values (:id, 'zzz', :pid, :set_key,"
+                    " :slot, 'S', :level, :main_key, '24', '[]', 0, 0, '{}',"
+                    " 'drive_disc', 'manual', datetime('now'), datetime('now'))"
+                ),
+                {
+                    "id": f"mixed{i}",
+                    "pid": ui_player,
+                    "set_key": set_key,
+                    "slot": slot,
+                    "level": level,
+                    "main_key": main_key,
+                },
+            )
+
+    for sort in ("slot", "set", "level", "code", "main", "grade"):
+        for direction in ("asc", "desc"):
+            page = client.get(
+                "/ui/gear", params={"sort": sort, "direction": direction}
+            )
+            assert page.status_code == 200, (sort, direction, page.text[:300])

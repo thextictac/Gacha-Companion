@@ -22,7 +22,7 @@ from game_companion.db.models import (
     TrainingGoal,
     TrainingIssue,
 )
-from game_companion.utils import to_iso
+from game_companion.utils import as_dict, to_iso
 
 
 def profile_dict(p: PlayerProfile) -> dict:
@@ -46,7 +46,7 @@ def character_dict(c: Character) -> dict:
         "duplication_level": c.duplication_level,
         "favorite": c.favorite,
         "notes": c.notes,
-        "data": c.data,
+        "data": as_dict(c.data),
         "source": c.source,
         "last_verified_at": to_iso(c.last_verified_at),
         "skills": {s.skill_key: s.level for s in c.skills},

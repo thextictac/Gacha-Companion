@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from game_companion.db.base import Base, PKMixin, TimestampMixin
+from game_companion.db.base import Base, PKMixin, TimestampMixin, TolerantJSON
 
 SCOPE_GLOBAL = "global"
 
@@ -28,4 +28,4 @@ class PlayerPreference(PKMixin, TimestampMixin, Base):
     )
     scope: Mapped[str] = mapped_column(String(40), default=SCOPE_GLOBAL)
     key: Mapped[str] = mapped_column(String(80))
-    value: Mapped[dict | list | str | int | float | bool | None] = mapped_column(JSON, default=None)
+    value: Mapped[dict | list | str | int | float | bool | None] = mapped_column(TolerantJSON, default=None)
